@@ -35,6 +35,8 @@ final class RealServicesStack {
     static final String ORDER_DB = "mercury_order";
     static final String PRODUCT_DB = "mercury_product";
     static final String INVENTORY_DB = "mercury_inventory";
+    /** used by the Order Service that runs as its own process (so it can be killed) */
+    static final String ORDER_PROCESS_DB = "mercury_order_process";
 
     private static final Duration BUILD_TIMEOUT = Duration.ofMinutes(5);
     private static final Duration STARTUP_TIMEOUT = Duration.ofSeconds(120);
@@ -46,6 +48,7 @@ final class RealServicesStack {
     private final Path logDirectory;
     private final ServiceProcess inventory;
     private final ServiceProcess product;
+    private final ServiceProcess orderProcess;
 
     /** One real service running as its own process. */
     private final class ServiceProcess {
@@ -92,22 +95,40 @@ final class RealServicesStack {
         }
 
         void start(String databaseUrl, String dbUrlVariable) throws IOException, InterruptedException {
+            startCommand(List.of(
+                    Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                    "-jar", jar().toString()),
+                    java.util.Map.of(dbUrlVariable, databaseUrl));
+        }
+
+        void startCommand(List<String> command, java.util.Map<String, String> environment)
+                throws IOException, InterruptedException {
             if (port == 0) {
                 port = freePort();
             }
             Path log = logDirectory.resolve(name + ".log");
-            ProcessBuilder builder = new ProcessBuilder(
-                    Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-                    "-jar", jar().toString())
+            ProcessBuilder builder = new ProcessBuilder(command)
                     .directory(project.toFile())
                     .redirectErrorStream(true)
                     .redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile()));
             builder.environment().put("SERVER_PORT", String.valueOf(port));
-            builder.environment().put(dbUrlVariable, databaseUrl);
             builder.environment().put("POSTGRES_USER", dbUsername());
             builder.environment().put("POSTGRES_PASSWORD", dbPassword());
+            builder.environment().putAll(environment);
             process = builder.start();
             awaitHealthy(log);
+        }
+
+        /** SIGKILL: no shutdown hooks, no cleanup, exactly like a crash */
+        void kill() {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+                try {
+                    process.waitFor(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
         }
 
         void stop() {
@@ -161,6 +182,7 @@ final class RealServicesStack {
         this.logDirectory = orderProject.resolve("target").resolve("it-logs");
         this.inventory = new ServiceProcess("inventory-service");
         this.product = new ServiceProcess("product-service");
+        this.orderProcess = new ServiceProcess("order-service");
 
         // Not stopped explicitly: the Spring context still holds pooled connections until the JVM
         // exits. Testcontainers' Ryuk sidecar removes the container when this JVM is gone.
@@ -183,10 +205,55 @@ final class RealServicesStack {
         if (instance != null) {
             instance.inventory.stop();
             instance.product.stop();
+            instance.orderProcess.stop();
         }
     }
 
     // ---- control --------------------------------------------------------------------------
+
+    /**
+     * Runs Order Service as its own process from this module's real main classes and real
+     * configuration (the test classes are left off the classpath so application.properties is the
+     * production one), with fast recovery settings. Used to kill it mid-saga.
+     */
+    void startOrderProcess(String inventoryUrl) throws IOException, InterruptedException {
+        String classpath = java.util.Arrays.stream(
+                        System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"))
+                                .split(File.pathSeparator))
+                .filter(entry -> !entry.endsWith("test-classes"))
+                .collect(java.util.stream.Collectors.joining(File.pathSeparator));
+
+        java.util.Map<String, String> environment = new java.util.HashMap<>();
+        environment.put("ORDER_DB_URL", jdbcUrl(ORDER_PROCESS_DB));
+        environment.put("PRODUCT_SERVICE_URL", product.baseUrl());
+        environment.put("INVENTORY_SERVICE_URL", inventoryUrl);
+        environment.put("ORDER_RECOVERY_ENABLED", "true");
+        environment.put("ORDER_RECOVERY_INTERVAL", "1s");
+        environment.put("ORDER_RECOVERY_STALE_AFTER", "3s");
+        environment.put("ORDER_RECOVERY_LEASE", "3s");
+        environment.put("ORDER_RECOVERY_INITIAL_BACKOFF", "500ms");
+        environment.put("ORDER_RECOVERY_MAX_BACKOFF", "2s");
+        environment.put("HTTP_CLIENT_READ_TIMEOUT", "30s");
+        environment.put("ORDER_INVENTORY_CB_WINDOW", "1000");
+        environment.put("ORDER_INVENTORY_CB_MIN_CALLS", "1000");
+
+        orderProcess.startCommand(List.of(
+                        Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                        "-cp", classpath, "com.mercury.order.OrderServiceApplication"),
+                environment);
+    }
+
+    void killOrderProcess() {
+        orderProcess.kill();
+    }
+
+    void stopOrderProcess() {
+        orderProcess.stop();
+    }
+
+    String orderProcessBaseUrl() {
+        return orderProcess.baseUrl();
+    }
 
     void stopInventoryService() {
         inventory.stop();
@@ -194,6 +261,13 @@ final class RealServicesStack {
 
     void startInventoryService() throws IOException, InterruptedException {
         inventory.start(jdbcUrl(INVENTORY_DB), "INVENTORY_DB_URL");
+    }
+
+    /** safety net for tests that stop Inventory: make sure it is running for whoever comes next */
+    void startInventoryServiceIfStopped() throws IOException, InterruptedException {
+        if (inventory.process == null || !inventory.process.isAlive()) {
+            startInventoryService();
+        }
     }
 
     // ---- connection details ---------------------------------------------------------------
@@ -235,6 +309,7 @@ final class RealServicesStack {
             postgres.start();
             createDatabase(PRODUCT_DB);
             createDatabase(INVENTORY_DB);
+            createDatabase(ORDER_PROCESS_DB);
 
             inventory.build();
             product.build();
@@ -242,6 +317,7 @@ final class RealServicesStack {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 inventory.stop();
                 product.stop();
+                orderProcess.stop();
             }));
 
             inventory.start(jdbcUrl(INVENTORY_DB), "INVENTORY_DB_URL");

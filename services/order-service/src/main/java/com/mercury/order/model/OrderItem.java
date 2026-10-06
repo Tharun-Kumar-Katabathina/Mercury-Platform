@@ -33,6 +33,11 @@ public class OrderItem {
     @Column(nullable = false)
     private Integer quantity;
 
+    /** Saga progress, not part of the snapshot. Changed through OrderItemRepository. */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private ReservationStatus reservationStatus = ReservationStatus.NOT_STARTED;
+
     protected OrderItem() {
     }
 
@@ -83,5 +88,9 @@ public class OrderItem {
 
     public Integer getQuantity() {
         return quantity;
+    }
+
+    public ReservationStatus getReservationStatus() {
+        return reservationStatus;
     }
 }

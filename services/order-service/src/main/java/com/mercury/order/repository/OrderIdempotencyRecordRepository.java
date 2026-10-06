@@ -23,4 +23,6 @@ public interface OrderIdempotencyRecordRepository extends JpaRepository<OrderIde
     Optional<ClaimView> findClaimView(@Param("idempotencyKey") String idempotencyKey);
 
     void deleteByIdempotencyKey(String idempotencyKey);
+
+    void deleteByOrderId(UUID orderId);
 }

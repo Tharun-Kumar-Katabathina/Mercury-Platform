@@ -42,6 +42,7 @@ On a replay the same body is returned with the extra response header
 | `GET` | `/api/v1/inventory/{productId}` | Read stock |
 | `PUT` | `/api/v1/inventory/{productId}` | Set `availableQuantity` |
 | `POST` | `/api/v1/inventory/{productId}/reserve` | Reserve stock; needs `Idempotency-Key` (required, not blank, max 255 characters) |
+| `GET` | `/api/v1/inventory/{productId}/reservations/{idempotencyKey}` | Read-only: the reservation made under that key, or `404 RESERVATION_NOT_FOUND` (used by Order Service recovery) |
 | `POST` | `/api/v1/inventory/{productId}/release` | Give reserved stock back; same key rules; `409 INSUFFICIENT_RESERVED_STOCK` if more than reserved |
 
 The Inventory reserve response additionally contains `updatedAt`; Product Service ignores
@@ -186,7 +187,7 @@ What has been observed (not guarantees beyond the invariant):
 | `InventoryClientTests` (Product) | 7 | Exact requests sent by the client, key forwarding, replay-flag parsing, error translation (404/409/500/unreachable) |
 | `ProductReservationApiTests` (Product) | 13 | Product-side decisions with a **mocked** `InventoryClient`: validation order, product check, pass-through of Inventory errors, 502/503 |
 | `ProductInventoryIntegrationTests` (Product) | 6 | The **real** stack, see below |
-| Inventory suites | 33 | CRUD, `@Version` stale-write rejection, reservation, idempotency, concurrency (H2) |
+| Inventory suites | 40 | CRUD, `@Version` stale-write rejection, reservation, idempotency, concurrency (H2) |
 
 ### The real Product → Inventory → PostgreSQL integration test
 

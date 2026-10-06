@@ -1,7 +1,9 @@
 # Order Service
 
 Creates orders across Product Service and Inventory Service, keeps them consistent without a
-distributed transaction, and is idempotent. Everything below describes what is implemented.
+distributed transaction, is idempotent, and recovers from lost responses, failed compensations and crashes.
+Everything below describes what is implemented. Failure recovery has its own document:
+**[Saga reliability and recovery](saga-recovery.md)**.
 
 ## 1. Architecture
 
@@ -74,12 +76,16 @@ Flyway migrations in `src/main/resources/db/migration`; Hibernate runs with `ddl
 | Table | Purpose | Notable constraints |
 |---|---|---|
 | `orders` | id (UUID), status, total_amount, created_at, updated_at | status in (`PENDING`,`CONFIRMED`,`CANCELLED`); `total_amount >= 0` |
-| `order_items` | one row per product in an order | FK to `orders`; `quantity > 0`; `unit_price >= 0`; unique (`order_id`,`product_id`); index on `order_id` |
+| `order_items` | one row per product in an order | FK to `orders`; `quantity > 0`; `unit_price >= 0`; unique (`order_id`,`product_id`); index on `order_id`; `reservation_status` (V3) |
 | `order_idempotency_records` | one row per client Idempotency-Key (V2) | unique `idempotency_key`; FK to `orders`; status `IN_PROGRESS`/`COMPLETED` |
+| `order_saga` | durable saga progress, one row per order (V3) | PK/FK `order_id`; state in (`RESERVING`,`COMPENSATING`,`CONFIRMED`,`CANCELLED`,`RECOVERY_FAILED`); `attempt_count >= 0`; index on (`state`,`next_attempt_at`) |
+
+Migrations: `V1__initial_order_schema.sql`, `V2__add_order_idempotency_records.sql`,
+`V3__add_durable_saga.sql` (per-item reservation status and `order_saga`, backfilled for existing orders).
 
 **Items are a snapshot.** `product_name`, `sku` and `unit_price` are copied from Product Service when
 the order is placed and never re-read. If the product's price changes later, the order keeps the old
-price (covered by an integration test).
+price (covered by an integration test). `reservation_status` is saga progress, not part of the snapshot.
 
 ## 4. Order lifecycle
 
@@ -91,9 +97,10 @@ price (covered by an integration test).
     +--------------------------------------->  CANCELLED   (final)
 ```
 
-`CANCELLED` means **fully compensated**. If compensation itself fails the order stays `PENDING` (see
-known limitations). The state machine is enforced in the `Order` entity: only a `PENDING` order can
-be confirmed or cancelled.
+`CANCELLED` means **fully compensated**. An order whose compensation is still outstanding stays `PENDING`
+and is finished by recovery (or becomes `RECOVERY_FAILED` in `order_saga` if recovery gives up). The state
+machine is enforced in the `Order` entity: only a `PENDING` order can be confirmed or cancelled. The saga's
+own states are in [saga-recovery.md](saga-recovery.md#2-durable-state).
 
 ## 5. Product integration
 
@@ -114,6 +121,10 @@ invents one. Deterministic keys, one per order and product:
 | release | `order:{orderId}:product:{productId}:release` |
 
 Because the keys are fixed for a given order, repeating either call is safe.
+
+A third call, `GET /api/v1/inventory/{productId}/reservations/{key}`, is read-only and exists for recovery:
+it says whether a reservation was made under a key, which is how an unknown reserve outcome (a lost response)
+is resolved without sending a second reserve. See [saga-recovery.md](saga-recovery.md#3-ambiguous-reservations).
 
 ### Inventory release endpoint (added for compensation)
 
@@ -150,31 +161,25 @@ it is correct even if open-in-view is switched on (see Testing).
 
 ## 8. The saga: reservation and compensation
 
-`OrderService.createOrder`, simplified:
+`OrderService.createOrder` hands the saved order to `OrderSagaService`:
 
 ```
  validate request                      -> 400 INVALID_ORDER
  look up Idempotency-Key               -> replay / 422 / wait
  read products (no side effects)       -> 404 PRODUCT_NOT_FOUND, 502/503
- save PENDING order + claim key        (one local transaction)
- for each item: reserve stock          (remote, key order:{id}:product:{pid})
+ save PENDING order + claim key + saga (one local transaction)
+ for each item: mark RESERVING, reserve stock, mark RESERVED   (key order:{id}:product:{pid})
       any failure -> COMPENSATE, rethrow the downstream error
- confirm order + store response        (one local transaction)
+ confirm order + store response + saga CONFIRMED               (one local transaction)
       failure -> check the order's real state, then COMPENSATE
 ```
 
-**Compensate** = release every reservation this order made (newest first, release is idempotent),
-then mark the order `CANCELLED` and free the key. Cases covered by tests:
-
-| Situation | Outcome |
-|---|---|
-| Insufficient stock on the first item | nothing to release; order `CANCELLED`; `409 INSUFFICIENT_STOCK` |
-| Failure on a later item | earlier items released; order `CANCELLED` |
-| Inventory down / failing | `503` / `502`; order `CANCELLED` |
-| Stock reserved, then saving the CONFIRMED order fails | all reservations released; order `CANCELLED`; `500 ORDER_PROCESSING_FAILED` |
-| Confirm "fails" but the order really was committed | the confirmed order is returned; **no** release (releasing would oversell) |
-| Confirm fails and the order's state cannot be read | stock is **not** released (a leak is safer than an oversell); `500 ORDER_PROCESSING_FAILED` |
-| A release fails during compensation | order stays `PENDING`, claim stays `IN_PROGRESS`; a retry gets `409 ORDER_CONFLICT` |
+Each item's progress is written **before** its remote call, so a timeout or crash leaves a durable
+"outcome unknown" record instead of nothing. **Compensate** is one idempotent routine used by the request
+and by the recovery worker: resolve unknown reservations by asking Inventory, release held ones under a
+deterministic key, then cancel the order and free the key. If it cannot finish, the saga stays
+`COMPENSATING` and recovery retries it with backoff. Details, tables and the failure matrix are in
+[saga-recovery.md](saga-recovery.md#4-compensation-one-routine-used-everywhere).
 
 Reservation is sequential in a fixed order. No database transaction is open during any remote call.
 
@@ -200,42 +205,55 @@ All errors use `{"timestamp","status","error","message"}`.
 Any other 4xx from a downstream service keeps its status and message; if its body has no error code,
 the code is `PRODUCT_REQUEST_REJECTED` / `INVENTORY_REQUEST_REJECTED`.
 
-## 10. Timeouts and observability
+## 10. Timeouts, resilience and observability
 
 - Every call to Product and Inventory has `spring.http.clients.connect-timeout` (default `2s`) and
-  `read-timeout` (default `5s`); a timeout becomes a `503` like an unreachable service. Verified
-  against a real slow HTTP server. **There are no retries and no circuit breaker.**
-- `/actuator/health` on port 8083.
-- Logs carry the order id, product id and a short SHA-256 fingerprint of the Idempotency-Key; the raw
-  key is never logged.
+  `read-timeout` (default `5s`); a timeout becomes a `503`. Verified against a real slow HTTP server.
+- A **circuit breaker and a bulkhead** per downstream protect the live request path (fail fast when a
+  service keeps failing; cap concurrent calls). A request refused this way surfaces as `503` and is known
+  to have never been sent. See [saga-recovery.md](saga-recovery.md#6-circuit-breaker-and-bulkhead-live-path-only).
+- `/actuator/health`, Micrometer metrics and a read-only `/actuator/sagas` overview of unfinished orders; see
+  [saga-recovery.md](saga-recovery.md#7-observability).
+- Logs carry the order id, product id, operation, result, duration and a short SHA-256 fingerprint of the
+  Idempotency-Key; the raw key is never logged.
 
 ## 11. Testing
 
 | Suite | Count | Covers |
 |---|---|---|
 | `OrderPersistenceTests`, `OrderRetrievalApiTests` | 10 | model, Flyway schema, DB constraints, state transitions, GET |
-| `ProductClientTests`, `InventoryClientTests`, `ClientTimeoutTests` | 13 | wire format, error translation, real timeouts |
+| `ProductClientTests`, `InventoryClientTests`, `ClientTimeoutTests` | 12 (4 + 6 + 2) | wire format, error translation, real timeouts |
 | `OrderPlannerTests` | 11 | validation, snapshot, total, canonical order |
 | `OrderServiceTests` | 16 | creation, reservation keys, every failure and compensation path, idempotency, 100-way concurrency |
 | `OrderIncompleteCompensationTests` | 1 | failed release leaves the order `PENDING` |
 | `OrderApiTests` | 17 | status codes and error bodies for every case in section 9 |
 | `OrderIdempotencyWithOpenInViewTests` | 1 | regression: duplicates must see completion even with open-in-view on |
+| `SagaRecoveryTests` | 12 | durable progress, ambiguous reservations, recovery, backoff, exclusivity |
+| `DownstreamGuardTests` | 8 | circuit breaker and bulkhead |
+| `SagaOperationsTests` | 4 | `/actuator/sagas` and metrics |
+| `OrderServiceApplicationTests` | 1 | context loads |
 | **`OrderFlowIntegrationTests`** | 12 | **real** Order, Product, Inventory and PostgreSQL |
+| **`SagaRecoveryIntegrationTests`** | 7 | **real stack + fault proxy**: lost responses, failed compensation, exhausted retries, six workers, `kill -9` |
+| **`ResilienceIntegrationTests`** | 1 | **real stack**: Inventory outage, circuit opens, recovery after return |
 
-The integration test starts a Testcontainers PostgreSQL (`postgres:16-alpine`), builds Product and
-Inventory from `../product-service` and `../inventory-service` and runs each as a separate process;
-Order Service runs in the test JVM. Scenarios (all verified directly in PostgreSQL): successful order
-and price snapshot; same-key replay deducts once; key mismatch; insufficient stock; failure on the
-second item gives back the first item's stock; unknown product; product without inventory; Inventory
-stopped (503) and orders working again after it restarts; stock reserved then order persistence
-fails (reservation released, no orphan); 100 concurrent same-key requests; 30 concurrent
-different-key orders against 10 units (never oversold, only CONFIRMED orders hold stock).
+Order Service: **113 tests**. (Product 27, Inventory 40.)
 
-**Lesson recorded by this suite:** `src/test/resources/application.properties` *replaces*
-`src/main/resources/application.properties` during tests, so settings must be mirrored there. A
-missing `spring.jpa.open-in-view=false` in the test file silently enabled Spring's default
-open-in-view and exposed stale claim reads under real PostgreSQL concurrency. Both the test
-configuration and the code (projection reads) were fixed.
+The integration tests start a Testcontainers PostgreSQL (`postgres:16-alpine`), build Product and Inventory
+from `../product-service` and `../inventory-service` and run each as a separate process; Order Service runs in
+the test JVM (and, for the kill test, as its own process). `OrderFlowIntegrationTests` scenarios (all verified
+directly in PostgreSQL): successful order and price snapshot; same-key replay deducts once; key mismatch;
+insufficient stock; failure on the second item gives back the first item's stock; unknown product; product
+without inventory; Inventory stopped (503, order left for recovery, then cancelled by recovery, ordering works
+again); stock reserved then order persistence fails (reservation released, no orphan); 100 concurrent same-key
+requests; 30 concurrent different-key orders against 10 units (never oversold; excess load is shed with 409 or
+503; only CONFIRMED orders hold stock). The failure-injection tests are described in
+[saga-recovery.md](saga-recovery.md#10-tests).
+
+**Lessons recorded by these suites.** (1) `src/test/resources/application.properties` *replaces*
+`src/main/resources/application.properties` during tests, so settings must be mirrored there; a missing
+`spring.jpa.open-in-view=false` silently enabled open-in-view and exposed stale claim reads under real
+PostgreSQL concurrency, fixed in both the test config and the code (projection reads). (2) Resilience4j
+silently caps `minimum-calls` at the window size; Order Service now refuses that configuration at startup.
 
 ## 12. Local development
 
@@ -250,6 +268,7 @@ Ports: Order `8083`, Product `8081`, Inventory `8082`, PostgreSQL `5432`.
 | `INVENTORY_SERVICE_URL` | `http://localhost:8082` |
 | `HTTP_CLIENT_CONNECT_TIMEOUT` / `HTTP_CLIENT_READ_TIMEOUT` | `2s` / `5s` |
 | `ORDER_IDEMPOTENCY_WAIT_TIMEOUT` | `5s` |
+| `ORDER_RECOVERY_*`, `ORDER_INVENTORY_*`, `ORDER_PRODUCT_*`, `MANAGEMENT_ENDPOINTS` | see [saga-recovery.md](saga-recovery.md#8-configuration) |
 
 ```bash
 docker compose up -d postgres
@@ -266,30 +285,29 @@ curl -s -X POST localhost:8082/api/v1/inventory -H 'Content-Type: application/js
 curl -i -X POST localhost:8083/api/v1/orders -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: order-001' -d '{"items":[{"productId":"<id>","quantity":2}]}'
 # repeat the same curl: 201 + Idempotent-Replayed: true, stock unchanged
+
+curl -s localhost:8083/actuator/sagas          # any unfinished orders?
+curl -s localhost:8083/actuator/metrics/orders.recovery.pending
 ```
 
 Tests (from `services/order-service`):
 
 ```bash
-./mvnw clean test                                             # everything (needs Docker for the integration test)
-./mvnw clean test -Dtest='!OrderFlowIntegrationTests'         # without Docker
-./mvnw clean test -Dtest=OrderFlowIntegrationTests            # only the real integration test (~45 s)
+./mvnw clean test                                                    # everything (the integration tests need Docker)
+./mvnw clean test -Dtest='!*IntegrationTests'                        # without Docker
+./mvnw clean test -Dtest='OrderFlowIntegrationTests,SagaRecoveryIntegrationTests,ResilienceIntegrationTests'   # only the real-stack tests (~100 s)
 ```
 
 ## 13. Known limitations
 
-- **Ambiguous outcomes.** If a reserve call times out after Inventory already applied it, Order Service
-  reports a failure and releases only reservations it *knows* succeeded; that one reservation can be
-  orphaned. Retrying reserve under the same key would resolve it (it is idempotent) but retries were
-  deliberately not added yet.
-- **Stuck orders need reconciliation.** An order left `PENDING` (failed compensation, or a process
-  crash mid-saga) keeps its key `IN_PROGRESS` and blocks that key. There is no recovery job yet.
-- Failed attempts leave `CANCELLED` orders behind (an audit trail); there is no cleanup or retention.
-- No retries, circuit breaker or bulkhead; only timeouts.
+The failure-recovery limitations are listed in [saga-recovery.md](saga-recovery.md#11-known-limitations).
+In addition:
+
 - Prices are read once, when the order is placed; a product price change between validation and
   confirmation is not detected.
 - The stored response snapshot column holds up to 100,000 characters, which bounds the number of
   items per order in practice.
 - Product Service's `quantity` field is unrelated to Inventory stock.
-- The integration test needs Docker and expects `../product-service` and `../inventory-service`
-  next to `order-service`; it rebuilds both with their `mvnw` on every run.
+- The integration tests need Docker and expect `../product-service` and `../inventory-service`
+  next to `order-service`; they rebuild both with their `mvnw` on every run.
+

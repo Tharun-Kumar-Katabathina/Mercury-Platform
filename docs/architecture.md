@@ -63,13 +63,14 @@ Rules that hold in the code today:
 
 Services call each other with plain synchronous REST: easy to reason about and test. The Order
 Service coordinates Product and Inventory as an orchestrated saga with compensating calls (see
-[Order Service](order-service.md)); there is no messaging (Kafka) and no resilience library yet,
-only client timeouts.
+[Order Service](order-service.md)); there is no messaging (Kafka) yet,
+client timeouts, and (in Order Service) a circuit breaker, a bulkhead and a durable recovery worker.
 
 ## Related documents
 
 - [Product to Inventory reservation flow](product-inventory-flow.md): API, idempotency,
   error propagation, concurrency.
 - [Order Service](order-service.md): order creation saga, idempotency, compensation.
+- [Saga reliability and recovery](saga-recovery.md): durable saga state, recovery worker, circuit breaker, failure scenarios.
 - [Local development](local-development.md): starting everything, environment variables,
   running the tests, caveats.

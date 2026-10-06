@@ -23,6 +23,10 @@ public class IdempotencyRecord {
     @Column(nullable = false, length = 64)
     private String requestHash;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 10)
+    private IdempotencyOperation operation;
+
     @Column(nullable = false)
     private UUID productId;
 
@@ -47,6 +51,14 @@ public class IdempotencyRecord {
 
     public void setIdempotencyKey(String idempotencyKey) {
         this.idempotencyKey = idempotencyKey;
+    }
+
+    public IdempotencyOperation getOperation() {
+        return operation;
+    }
+
+    public void setOperation(IdempotencyOperation operation) {
+        this.operation = operation;
     }
 
     public String getRequestHash() {

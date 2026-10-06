@@ -12,6 +12,8 @@ import com.mercury.inventory.exception.IdempotencyKeyMismatchException;
 import com.mercury.inventory.exception.InsufficientReservedStockException;
 import com.mercury.inventory.exception.InsufficientStockException;
 import com.mercury.inventory.exception.InventoryNotFoundException;
+import com.mercury.inventory.exception.ReservationNotFoundException;
+import com.mercury.inventory.model.IdempotencyOperation;
 import com.mercury.inventory.model.IdempotencyRecord;
 import com.mercury.inventory.model.Inventory;
 import com.mercury.inventory.repository.IdempotencyRecordRepository;
@@ -103,7 +105,7 @@ public class InventoryService {
             UUID productId, int quantity, String idempotencyKey) {
 
         IdempotentResult<ReservationResponse> result = executeIdempotently(
-                productId, idempotencyKey,
+                productId, idempotencyKey, IdempotencyOperation.RESERVE,
                 sha256(productId + ":" + quantity),
                 ReservationResponse.class,
                 () -> reserveOnce(productId, quantity));
@@ -121,12 +123,29 @@ public class InventoryService {
             UUID productId, int quantity, String idempotencyKey) {
 
         IdempotentResult<ReleaseResponse> result = executeIdempotently(
-                productId, idempotencyKey,
+                productId, idempotencyKey, IdempotencyOperation.RELEASE,
                 sha256("RELEASE:" + productId + ":" + quantity),
                 ReleaseResponse.class,
                 () -> releaseOnce(productId, quantity));
 
         return new ReleaseResult(result.response(), result.replayed());
+    }
+
+    /**
+     * The result of the reservation made for {@code productId} under {@code idempotencyKey}, read
+     * without changing anything. This lets a caller that lost a reserve response find out whether
+     * the reservation happened. Only reservations count: a key used for a release, or for another
+     * product, is "not found".
+     */
+    @Transactional(readOnly = true)
+    public ReservationResponse findReservation(UUID productId, String idempotencyKey) {
+
+        IdempotencyRecord record = idempotencyRecordRepository.findByIdempotencyKey(idempotencyKey)
+                .filter(r -> r.getOperation() == IdempotencyOperation.RESERVE)
+                .filter(r -> r.getProductId().equals(productId))
+                .orElseThrow(() -> new ReservationNotFoundException(productId, idempotencyKey));
+
+        return jsonMapper.readValue(record.getResponseBody(), ReservationResponse.class);
     }
 
     private record IdempotentResult<T>(T response, boolean replayed) {
@@ -144,6 +163,7 @@ public class InventoryService {
     private <T> IdempotentResult<T> executeIdempotently(
             UUID productId,
             String idempotencyKey,
+            IdempotencyOperation operationType,
             String requestHash,
             Class<T> responseType,
             Supplier<T> operation) {
@@ -163,6 +183,7 @@ public class InventoryService {
                     IdempotencyRecord record = new IdempotencyRecord();
                     record.setIdempotencyKey(idempotencyKey);
                     record.setRequestHash(requestHash);
+                    record.setOperation(operationType);
                     record.setProductId(productId);
                     record.setResponseBody(jsonMapper.writeValueAsString(response));
                     idempotencyRecordRepository.saveAndFlush(record);

@@ -33,7 +33,7 @@ class ProductClientTests {
     void setUp() {
         RestClient.Builder builder = RestClient.builder();
         server = MockRestServiceServer.bindTo(builder).build();
-        client = new ProductClient(builder, BASE_URL);
+        client = new ProductClient(builder, BASE_URL, DownstreamGuard.passThrough());
     }
 
     @Test

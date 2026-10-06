@@ -82,4 +82,13 @@ public class InventoryController {
         }
         return response.body(result.response());
     }
+
+    /** Read-only: what, if anything, was reserved for this product under this idempotency key. */
+    @GetMapping("/{productId}/reservations/{idempotencyKey}")
+    public ReservationResponse getReservation(
+            @PathVariable UUID productId,
+            @PathVariable String idempotencyKey) {
+
+        return inventoryService.findReservation(productId, idempotencyKey);
+    }
 }

@@ -1,7 +1,6 @@
 package com.mercury.order.integration;
 
 import com.mercury.order.service.OrderTransactions;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -60,11 +59,6 @@ class OrderFlowIntegrationTests {
         registry.add("inventory.service.url", stack::inventoryBaseUrl);
     }
 
-    @AfterAll
-    static void stopServices() {
-        RealServicesStack.stopServices();
-    }
-
     @Value("${local.server.port}")
     private int orderPort;
 
@@ -73,6 +67,9 @@ class OrderFlowIntegrationTests {
 
     @MockitoSpyBean
     private OrderTransactions transactions;
+
+    @Autowired
+    private com.mercury.order.service.SagaRecovery recovery;
 
     private final List<UUID> createdProducts = new ArrayList<>();
 
@@ -240,7 +237,7 @@ class OrderFlowIntegrationTests {
     // ---- 6. inventory unavailable -----------------------------------------------------------
 
     @Test
-    void inventoryUnavailableIs503TheOrderIsCancelledAndOrdersWorkAgainOnceItIsBack() throws Exception {
+    void inventoryUnavailableIs503TheOrderWaitsForRecoveryAndThenIsCancelledAndOrdersWorkAgain() throws Exception {
         UUID product = productWithStock("Laptop", "100.00", 10);
         RealServicesStack stack = RealServicesStack.start();
 
@@ -249,12 +246,22 @@ class OrderFlowIntegrationTests {
             Api down = placeOrder(key(), item(product, 1));
             assertThat(down.status()).isEqualTo(503);
             assertThat(down.body().path("error").asString()).isEqualTo("INVENTORY_SERVICE_UNAVAILABLE");
-            assertThat(orderStatusFor(product)).isEqualTo("CANCELLED");
+            // Inventory cannot even be asked what happened, so nothing is guessed: the order is
+            // left for recovery, durably, instead of being declared cancelled
+            assertThat(orderStatusFor(product)).isEqualTo("PENDING");
         } finally {
             stack.startInventoryService();
         }
 
+        // Inventory is back: recovery finds nothing was reserved and cancels the order
+        UUID orderId = orderIdFor(product);
+        update(RealServicesStack.ORDER_DB,
+                "UPDATE order_saga SET next_attempt_at = now() - interval '1 minute', locked_until = NULL "
+                        + "WHERE order_id = ?", orderId);
+        assertThat(recovery.recoverDue()).isEqualTo(1);
+        assertThat(orderStatusFor(product)).isEqualTo("CANCELLED");
         assertThat(stock(product)).isEqualTo(new Stock(10, 0));
+
         Api recovered = placeOrder(key(), item(product, 1));
         assertThat(recovered.status()).isEqualTo(201);
         assertThat(stock(product)).isEqualTo(new Stock(9, 1));
@@ -308,9 +315,10 @@ class OrderFlowIntegrationTests {
         List<Api> responses = runConcurrently(30, i -> () -> placeOrder(key(), item(product, 1)));
 
         long confirmed = responses.stream().filter(r -> r.status() == 201).count();
-        // every non-201 is a clean 409 (out of stock, or it lost the lock race): nothing else
+        // every non-201 is a clean refusal: 409 (out of stock / lost the lock race) or 503 (the
+        // bulkhead shed the excess concurrent calls to Inventory). Never a 500, never a hang.
         assertThat(responses.stream().filter(r -> r.status() != 201))
-                .allMatch(r -> r.status() == 409);
+                .allMatch(r -> r.status() == 409 || r.status() == 503);
 
         Stock result = stock(product);
         assertThat(confirmed).isLessThanOrEqualTo(stock);
@@ -345,6 +353,7 @@ class OrderFlowIntegrationTests {
             }
             for (UUID order : orders) {
                 update(RealServicesStack.ORDER_DB, "DELETE FROM order_idempotency_records WHERE order_id = ?", order);
+                update(RealServicesStack.ORDER_DB, "DELETE FROM order_saga WHERE order_id = ?", order);
                 update(RealServicesStack.ORDER_DB, "DELETE FROM order_items WHERE order_id = ?", order);
                 update(RealServicesStack.ORDER_DB, "DELETE FROM orders WHERE id = ?", order);
             }
@@ -474,6 +483,18 @@ class OrderFlowIntegrationTests {
         return string(RealServicesStack.ORDER_DB,
                 "SELECT o.status FROM orders o JOIN order_items i ON i.order_id = o.id "
                         + "WHERE i.product_id = ?", productId);
+    }
+
+    private UUID orderIdFor(UUID productId) throws SQLException {
+        try (Connection c = RealServicesStack.start().open(RealServicesStack.ORDER_DB);
+             PreparedStatement s = c.prepareStatement(
+                     "SELECT DISTINCT order_id FROM order_items WHERE product_id = ?")) {
+            s.setObject(1, productId);
+            try (ResultSet rs = s.executeQuery()) {
+                assertThat(rs.next()).isTrue();
+                return rs.getObject(1, UUID.class);
+            }
+        }
     }
 
     private int ordersFor(UUID productId) throws SQLException {

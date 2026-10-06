@@ -1,6 +1,5 @@
 package com.mercury.order.service;
 
-import com.mercury.order.client.InventoryClient;
 import com.mercury.order.dto.CreateOrderItemRequest;
 import com.mercury.order.dto.CreateOrderRequest;
 import com.mercury.order.dto.OrderResponse;
@@ -55,19 +54,19 @@ public class OrderService {
     private final OrderRepository orderRepository;
     private final OrderPlanner planner;
     private final OrderTransactions transactions;
-    private final InventoryClient inventoryClient;
+    private final OrderSagaService sagaService;
     private final Duration idempotencyWaitTimeout;
 
     public OrderService(
             OrderRepository orderRepository,
             OrderPlanner planner,
             OrderTransactions transactions,
-            InventoryClient inventoryClient,
+            OrderSagaService sagaService,
             @Value("${order.idempotency.wait-timeout:5s}") Duration idempotencyWaitTimeout) {
         this.orderRepository = orderRepository;
         this.planner = planner;
         this.transactions = transactions;
-        this.inventoryClient = inventoryClient;
+        this.sagaService = sagaService;
         this.idempotencyWaitTimeout = idempotencyWaitTimeout;
     }
 
@@ -113,109 +112,11 @@ public class OrderService {
                 throw e;
             }
 
-            return process(orderId, idempotencyKey, draft);
+            return sagaService.execute(orderId, idempotencyKey, draft);
         }
 
         throw new OrderConflictException(
                 "Another request with this Idempotency-Key is being processed; retry shortly");
-    }
-
-    // ---- the saga ------------------------------------------------------------------------
-
-    private OrderCreationResult process(UUID orderId, String idempotencyKey, OrderDraft draft) {
-
-        log.info("Order {} PENDING for key {}: {} item(s), total {}",
-                orderId, fingerprint(idempotencyKey), draft.items().size(), draft.totalAmount());
-
-        List<OrderDraft.Item> reserved = new ArrayList<>();
-        try {
-            for (OrderDraft.Item item : draft.items()) {
-                inventoryClient.reserve(
-                        item.productId(), item.quantity(), reservationKey(orderId, item.productId()));
-                reserved.add(item);
-                log.info("Order {} reserved {} x product {}", orderId, item.quantity(), item.productId());
-            }
-        } catch (RuntimeException e) {
-            log.warn("Order {} could not reserve stock ({}); compensating", orderId, e.getMessage());
-            compensate(orderId, idempotencyKey, reserved);
-            throw e;
-        }
-
-        try {
-            OrderResponse confirmed = transactions.confirm(orderId, idempotencyKey);
-            log.info("Order {} CONFIRMED", orderId);
-            return new OrderCreationResult(confirmed, false);
-        } catch (RuntimeException e) {
-            return recoverFromFailedConfirm(orderId, idempotencyKey, reserved, e);
-        }
-    }
-
-    /**
-     * Stock is reserved but the order could not be marked CONFIRMED. The commit may in fact have
-     * succeeded before the error surfaced, so look before releasing: giving back stock for an
-     * order that really is CONFIRMED would oversell it.
-     */
-    private OrderCreationResult recoverFromFailedConfirm(
-            UUID orderId, String idempotencyKey, List<OrderDraft.Item> reserved, RuntimeException cause) {
-
-        Optional<OrderStatus> status;
-        try {
-            status = transactions.statusOf(orderId);
-        } catch (RuntimeException unreadable) {
-            log.error("Order {} could not be confirmed and its state cannot be read; "
-                    + "leaving reserved stock untouched for reconciliation", orderId, cause);
-            throw new OrderProcessingException(
-                    "Order could not be completed and needs reconciliation", cause);
-        }
-
-        if (status.isPresent() && status.get() == OrderStatus.CONFIRMED) {
-            log.warn("Order {} is CONFIRMED despite error on confirm; returning it", orderId);
-            return resolveExisting(idempotencyKey, null)
-                    .map(stored -> new OrderCreationResult(stored.order(), false))
-                    .orElseThrow(() -> new OrderProcessingException(
-                            "Order confirmed but its result is unavailable", cause));
-        }
-
-        log.error("Order {} could not be CONFIRMED; compensating", orderId, cause);
-        compensate(orderId, idempotencyKey, reserved);
-        throw new OrderProcessingException(
-                "Order could not be completed; reserved stock was released", cause);
-    }
-
-    /**
-     * Gives back every reservation this order made (newest first), then CANCELS the order.
-     * Release is idempotent under a deterministic key, so this is safe to repeat. If any release
-     * fails the order stays PENDING on purpose: CANCELLED must only mean "fully compensated".
-     */
-    private void compensate(UUID orderId, String idempotencyKey, List<OrderDraft.Item> reserved) {
-
-        List<OrderDraft.Item> newestFirst = new ArrayList<>(reserved);
-        Collections.reverse(newestFirst);
-
-        boolean allReleased = true;
-        for (OrderDraft.Item item : newestFirst) {
-            try {
-                inventoryClient.release(
-                        item.productId(), item.quantity(), releaseKey(orderId, item.productId()));
-                log.info("Order {} released {} x product {}", orderId, item.quantity(), item.productId());
-            } catch (RuntimeException e) {
-                allReleased = false;
-                log.error("Order {} FAILED to release {} x product {}", orderId, item.quantity(),
-                        item.productId(), e);
-            }
-        }
-
-        if (!allReleased) {
-            log.error("Order {} left PENDING: compensation incomplete, needs reconciliation", orderId);
-            return;
-        }
-
-        try {
-            transactions.cancel(orderId, idempotencyKey);
-            log.info("Order {} CANCELLED", orderId);
-        } catch (RuntimeException e) {
-            log.error("Order {} stock released but marking it CANCELLED failed", orderId, e);
-        }
     }
 
     // ---- idempotency ---------------------------------------------------------------------
@@ -259,15 +160,6 @@ public class OrderService {
     }
 
     // ---- keys and hashing ----------------------------------------------------------------
-
-    /** One reservation per (order, product), the same on every retry of that step. */
-    static String reservationKey(UUID orderId, UUID productId) {
-        return "order:" + orderId + ":product:" + productId;
-    }
-
-    static String releaseKey(UUID orderId, UUID productId) {
-        return reservationKey(orderId, productId) + ":release";
-    }
 
     /** Hash of the canonical request, so item order in the payload does not matter. */
     private static String requestHash(List<CreateOrderItemRequest> canonicalItems) {

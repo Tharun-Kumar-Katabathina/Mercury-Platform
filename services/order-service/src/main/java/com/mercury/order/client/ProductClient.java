@@ -2,6 +2,7 @@ package com.mercury.order.client;
 
 import com.mercury.order.dto.ProductDetails;
 import com.mercury.order.exception.ProductServiceException;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -21,11 +22,14 @@ import java.util.UUID;
 public class ProductClient {
 
     private final RestClient restClient;
+    private final DownstreamGuard guard;
 
     public ProductClient(
             RestClient.Builder builder,
-            @Value("${product.service.url}") String productServiceUrl) {
+            @Value("${product.service.url}") String productServiceUrl,
+            @Qualifier("productGuard") DownstreamGuard guard) {
 
+        this.guard = guard;
         this.restClient = builder
                 .baseUrl(productServiceUrl)
                 .defaultStatusHandler(
@@ -39,14 +43,16 @@ public class ProductClient {
 
     public ProductDetails getProduct(UUID productId) {
 
-        try {
-            return restClient.get()
-                    .uri("/api/v1/products/{id}", productId)
-                    .retrieve()
-                    .body(ProductDetails.class);
-        } catch (ResourceAccessException e) {
-            throw new ProductServiceException(HttpStatus.SERVICE_UNAVAILABLE, null, e);
-        }
+        return guard.execute(() -> {
+            try {
+                return restClient.get()
+                        .uri("/api/v1/products/{id}", productId)
+                        .retrieve()
+                        .body(ProductDetails.class);
+            } catch (ResourceAccessException e) {
+                throw new ProductServiceException(HttpStatus.SERVICE_UNAVAILABLE, null, e);
+            }
+        }, rejection -> new ProductServiceException(HttpStatus.SERVICE_UNAVAILABLE, null, rejection, true));
     }
 
     private static String readBody(InputStream body) {
