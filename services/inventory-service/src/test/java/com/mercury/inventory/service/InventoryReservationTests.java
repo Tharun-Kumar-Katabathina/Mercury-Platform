@@ -26,6 +26,10 @@ class InventoryReservationTests {
     @Autowired
     private InventoryService inventoryService;
 
+    private static String key() {
+        return UUID.randomUUID().toString();
+    }
+
     private UUID newInventory(int available) {
         UUID productId = UUID.randomUUID();
         inventoryService.createInventory(new CreateInventoryRequest(productId, available));
@@ -36,7 +40,8 @@ class InventoryReservationTests {
     void reserveMovesQuantityFromAvailableToReserved() {
         UUID productId = newInventory(10);
 
-        ReservationResponse response = inventoryService.reserveInventory(productId, 2);
+        ReservationResponse response = inventoryService
+                .reserveInventory(productId, 2, key()).response();
 
         assertThat(response.quantityReserved()).isEqualTo(2);
         assertThat(response.availableQuantity()).isEqualTo(8);
@@ -50,9 +55,9 @@ class InventoryReservationTests {
     @Test
     void reservingMoreThanAvailableFailsAndLeavesInventoryUnchanged() {
         UUID productId = newInventory(10);
-        inventoryService.reserveInventory(productId, 2);
+        inventoryService.reserveInventory(productId, 2, key());
 
-        assertThatThrownBy(() -> inventoryService.reserveInventory(productId, 10))
+        assertThatThrownBy(() -> inventoryService.reserveInventory(productId, 10, key()))
                 .isInstanceOf(InsufficientStockException.class);
 
         InventoryResponse stored = inventoryService.getInventory(productId);
@@ -64,7 +69,8 @@ class InventoryReservationTests {
     void canReserveExactlyAllRemainingStock() {
         UUID productId = newInventory(5);
 
-        ReservationResponse response = inventoryService.reserveInventory(productId, 5);
+        ReservationResponse response = inventoryService
+                .reserveInventory(productId, 5, key()).response();
 
         assertThat(response.availableQuantity()).isZero();
         assertThat(response.reservedQuantity()).isEqualTo(5);
@@ -72,7 +78,7 @@ class InventoryReservationTests {
 
     @Test
     void reservingUnknownProductThrowsNotFound() {
-        assertThatThrownBy(() -> inventoryService.reserveInventory(UUID.randomUUID(), 1))
+        assertThatThrownBy(() -> inventoryService.reserveInventory(UUID.randomUUID(), 1, key()))
                 .isInstanceOf(InventoryNotFoundException.class);
     }
 
@@ -95,7 +101,7 @@ class InventoryReservationTests {
                 ready.countDown();
                 try {
                     go.await();
-                    inventoryService.reserveInventory(productId, 1);
+                    inventoryService.reserveInventory(productId, 1, key());
                     succeeded.incrementAndGet();
                 } catch (InsufficientStockException e) {
                     insufficient.incrementAndGet();
