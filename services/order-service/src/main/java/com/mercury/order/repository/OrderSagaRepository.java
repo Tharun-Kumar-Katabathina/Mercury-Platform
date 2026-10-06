@@ -41,5 +41,9 @@ public interface OrderSagaRepository extends JpaRepository<OrderSaga, UUID> {
     @Query("select count(s) from OrderSaga s where s.state in :states and s.nextAttemptAt <= :now")
     long countDue(@Param("states") Collection<SagaState> states, @Param("now") Instant now);
 
+    /** when the longest-waiting due saga became due; empty when nothing is due */
+    @Query("select min(s.nextAttemptAt) from OrderSaga s where s.state in :states and s.nextAttemptAt <= :now")
+    java.util.Optional<Instant> oldestDue(@Param("states") Collection<SagaState> states, @Param("now") Instant now);
+
     List<OrderSaga> findTop100ByStateInOrderByCreatedAtAsc(Collection<SagaState> states);
 }

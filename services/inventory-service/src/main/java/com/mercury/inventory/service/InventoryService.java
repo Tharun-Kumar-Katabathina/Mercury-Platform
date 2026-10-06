@@ -44,13 +44,16 @@ public class InventoryService {
     private final TransactionTemplate transactionTemplate;
     private final JsonMapper jsonMapper;
     private final int reserveMaxAttempts;
+    private final ReservationMetrics metrics;
 
     public InventoryService(
             InventoryRepository inventoryRepository,
             IdempotencyRecordRepository idempotencyRecordRepository,
             TransactionTemplate transactionTemplate,
             JsonMapper jsonMapper,
-            @Value("${inventory.reserve.max-attempts:5}") int reserveMaxAttempts) {
+            @Value("${inventory.reserve.max-attempts:5}") int reserveMaxAttempts,
+            ReservationMetrics metrics) {
+        this.metrics = metrics;
         this.inventoryRepository = inventoryRepository;
         this.idempotencyRecordRepository = idempotencyRecordRepository;
         this.transactionTemplate = transactionTemplate;
@@ -104,11 +107,18 @@ public class InventoryService {
     public ReservationResult reserveInventory(
             UUID productId, int quantity, String idempotencyKey) {
 
-        IdempotentResult<ReservationResponse> result = executeIdempotently(
-                productId, idempotencyKey, IdempotencyOperation.RESERVE,
-                sha256(productId + ":" + quantity),
-                ReservationResponse.class,
-                () -> reserveOnce(productId, quantity));
+        IdempotentResult<ReservationResponse> result;
+        try {
+            result = executeIdempotently(
+                    productId, idempotencyKey, IdempotencyOperation.RESERVE,
+                    sha256(productId + ":" + quantity),
+                    ReservationResponse.class,
+                    () -> reserveOnce(productId, quantity));
+        } catch (InsufficientStockException e) {
+            metrics.rejected("rest", "INSUFFICIENT_STOCK");
+            throw e;
+        }
+        metrics.reserved("rest", result.replayed());
 
         return new ReservationResult(result.response(), result.replayed());
     }

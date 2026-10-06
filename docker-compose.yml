@@ -126,7 +126,7 @@ services:
     ports: ["127.0.0.1:8081:8081"]
     deploy:
       resources:
-        limits: { cpus: "1.0", memory: 448M }
+        limits: { cpus: "2.0", memory: 448M }
 
   inventory-service:
     <<: *service
@@ -145,7 +145,7 @@ services:
     ports: ["127.0.0.1:8082:8082"]
     deploy:
       resources:
-        limits: { cpus: "1.0", memory: 512M }
+        limits: { cpus: "2.0", memory: 512M }
 
   order-service:
     <<: *service
@@ -169,7 +169,7 @@ services:
     ports: ["127.0.0.1:8083:8083"]
     deploy:
       resources:
-        limits: { cpus: "1.5", memory: 512M }
+        limits: { cpus: "2.0", memory: 512M }
 
   notification-service:
     <<: *service
@@ -188,7 +188,7 @@ services:
     ports: ["127.0.0.1:8084:8084"]
     deploy:
       resources:
-        limits: { cpus: "1.0", memory: 448M }
+        limits: { cpus: "2.0", memory: 448M }
 
 networks:
   # The data tier (Postgres, Kafka, Qdrant) lives here only. `internal` means no route to the outside world

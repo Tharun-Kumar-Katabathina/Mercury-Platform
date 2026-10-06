@@ -1,6 +1,9 @@
 package com.mercury.order.outbox;
 
 import com.mercury.order.event.OrderEvent;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,8 +23,10 @@ public class OutboxWriter {
     private final OutboxRepository outbox;
     private final JsonMapper jsonMapper;
     private final Clock clock;
+    private final ObjectProvider<Tracer> tracer;
 
-    public OutboxWriter(OutboxRepository outbox, JsonMapper jsonMapper, Clock clock) {
+    public OutboxWriter(OutboxRepository outbox, JsonMapper jsonMapper, Clock clock, ObjectProvider<Tracer> tracer) {
+        this.tracer = tracer;
         this.outbox = outbox;
         this.jsonMapper = jsonMapper;
         this.clock = clock;
@@ -34,6 +39,19 @@ public class OutboxWriter {
                 event.orderId(),
                 event.eventType(),
                 jsonMapper.writeValueAsString(event),
-                Instant.now(clock)));
+                Instant.now(clock),
+                currentTraceParent()));
+    }
+
+    /** W3C traceparent of the span this write happens in, so the publish can continue the trace */
+    private String currentTraceParent() {
+        Tracer t = tracer.getIfAvailable();
+        Span span = t == null ? null : t.currentSpan();
+        if (span == null) {
+            return null;
+        }
+        var context = span.context();
+        return "00-" + context.traceId() + "-" + context.spanId()
+                + (Boolean.TRUE.equals(context.sampled()) ? "-01" : "-00");
     }
 }

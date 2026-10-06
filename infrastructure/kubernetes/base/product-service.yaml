@@ -54,7 +54,7 @@ spec:
                 configMapKeyRef: { name: mercury-config, key: INVENTORY_SERVICE_URL }
           resources:
             requests: { cpu: 100m, memory: 256Mi }
-            limits:   { cpu: 1000m, memory: 448Mi }
+            limits:   { cpu: 2000m, memory: 448Mi }
           # startup: allow a slow first start without the liveness probe killing the pod
           startupProbe:
             httpGet: { path: /actuator/health/liveness, port: http }

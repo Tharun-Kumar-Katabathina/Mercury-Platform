@@ -10,13 +10,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-mercury-verify}
-export POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-$(openssl rand -hex 12)}
+# remembered per project: a kept stack keeps its database volume, which fixed the password at first start
+PW_FILE="/tmp/${COMPOSE_PROJECT_NAME}.pw"
+[[ -n ${POSTGRES_PASSWORD:-} ]] || { [[ -s $PW_FILE ]] || (umask 077; openssl rand -hex 12 > "$PW_FILE"); POSTGRES_PASSWORD=$(cat "$PW_FILE"); }
+export POSTGRES_PASSWORD
 export POSTGRES_USER=${POSTGRES_USER:-mercury}
 export SMOKE_STATE_FILE=/tmp/mercury-verify-state
 DC="docker compose -f docker-compose.yml --profile platform"
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 fail() { echo "PLATFORM CHECK FAIL: $*" >&2; exit 1; }
-cleanup() { [[ ${1:-} == --keep ]] || { step "cleaning up"; $DC down -v --remove-orphans >/dev/null 2>&1 || true; }; }
+cleanup() { [[ ${1:-} == --keep ]] || { step "cleaning up"; $DC down -v --remove-orphans >/dev/null 2>&1 || true; rm -f "$PW_FILE"; }; }
 trap 'rc=$?; [[ $rc -ne 0 ]] && { $DC ps 2>/dev/null || true; $DC logs --tail 30 2>/dev/null || true; }; cleanup "${1:-}"; exit $rc' EXIT
 
 wait_healthy() { # every container of the project must report healthy

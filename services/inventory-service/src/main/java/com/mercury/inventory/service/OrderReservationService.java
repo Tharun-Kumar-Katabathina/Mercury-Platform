@@ -57,6 +57,7 @@ public class OrderReservationService {
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
     private final int maxAttempts;
+    private final ReservationMetrics metrics;
 
     public OrderReservationService(
             InventoryRepository inventoryRepository,
@@ -65,7 +66,9 @@ public class OrderReservationService {
             OutboxWriter outbox,
             TransactionTemplate transactionTemplate,
             Clock clock,
-            @Value("${inventory.reserve.max-attempts:5}") int maxAttempts) {
+            @Value("${inventory.reserve.max-attempts:5}") int maxAttempts,
+            ReservationMetrics metrics) {
+        this.metrics = metrics;
         this.inventoryRepository = inventoryRepository;
         this.reservations = reservations;
         this.processedEvents = processedEvents;
@@ -82,7 +85,9 @@ public class OrderReservationService {
 
         for (int attempt = 1; ; attempt++) {
             try {
-                return transactionTemplate.execute(status -> reserveOnce(command, items));
+                Result result = transactionTemplate.execute(status -> reserveOnce(command, items));
+                count(command, result);
+                return result;
             } catch (ObjectOptimisticLockingFailureException e) {
                 if (attempt >= maxAttempts) {
                     throw e;   // not lost: the consumer retries, then dead-letters; Order's deadline resolves it
@@ -95,6 +100,16 @@ public class OrderReservationService {
                 }
                 throw e;
             }
+        }
+    }
+
+    /** after the commit: one count per decision, never per retry (a DUPLICATE is not a new decision) */
+    private void count(ReservationCommand command, Result result) {
+        if (result == Result.RESERVED) {
+            metrics.reserved("async", false);
+        } else if (result == Result.REJECTED) {
+            reservations.findById(command.orderId())
+                    .ifPresent(r -> metrics.rejected("async", r.getReason()));
         }
     }
 

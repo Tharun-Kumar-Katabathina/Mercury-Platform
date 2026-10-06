@@ -41,6 +41,14 @@ public class SagaMetrics {
         Gauge.builder("orders.recovery.pending", () ->
                         sagas.countDue(List.of(SagaState.RESERVING, SagaState.AWAITING_INVENTORY, SagaState.COMPENSATING), Instant.now(clock)))
                 .description("sagas that are due for recovery right now").register(registry);
+        Gauge.builder("orders.recovery.lag.seconds", () -> {
+                    Instant now = Instant.now(clock);
+                    return sagas.oldestDue(List.of(SagaState.RESERVING, SagaState.AWAITING_INVENTORY, SagaState.COMPENSATING), now)
+                            .map(due -> (double) Math.max(0, now.getEpochSecond() - due.getEpochSecond()))
+                            .orElse(0.0);
+                })
+                .description("how long the longest-waiting due saga has been waiting for recovery (0 = nothing waiting)")
+                .baseUnit("seconds").register(registry);
         Gauge.builder("orders.recovery.exhausted", () -> sagas.countByState(SagaState.RECOVERY_FAILED))
                 .description("sagas that gave up and need a person").register(registry);
         for (SagaState state : SagaState.values()) {

@@ -21,4 +21,5 @@ Microservices e-commerce platform.
 - [Asynchronous inventory reservation](docs/async-reservation.md): Phase 10, ASYNC order flow over Kafka, deadline recovery, late reservations
 - [Saga reliability and recovery](docs/saga-recovery.md): durable saga state, recovery worker, circuit breaker, failure scenarios
 - [Production infrastructure](docs/infrastructure.md): Docker images, production-like Compose stack, Kubernetes manifests, health and graceful shutdown
+- [Observability](docs/observability.md): Prometheus metrics, Grafana dashboards, distributed traces across REST and Kafka, log correlation
 - [Local development](docs/local-development.md): run the services, run the tests

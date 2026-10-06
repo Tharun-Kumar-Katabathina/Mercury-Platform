@@ -38,7 +38,7 @@ public class OutboxTransactions {
         outbox.saveAllAndFlush(due);
         return due.stream()
                 .map(e -> new OutboxMessage(e.getSeq(), e.getEventId(), e.getAggregateId(),
-                        e.getEventType(), topics.topicFor(e.getEventType()), e.getPayload()))
+                        e.getEventType(), topics.topicFor(e.getEventType()), e.getPayload(), e.getTraceParent()))
                 .toList();
     }
 

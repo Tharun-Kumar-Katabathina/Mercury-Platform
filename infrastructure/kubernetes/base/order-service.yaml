@@ -60,7 +60,7 @@ spec:
                 configMapKeyRef: { name: mercury-config, key: ORDER_RESERVATION_MODE }
           resources:
             requests: { cpu: 150m, memory: 256Mi }
-            limits:   { cpu: 1500m, memory: 512Mi }
+            limits:   { cpu: 2000m, memory: 512Mi }
           # startup: allow a slow first start without the liveness probe killing the pod
           startupProbe:
             httpGet: { path: /actuator/health/liveness, port: http }

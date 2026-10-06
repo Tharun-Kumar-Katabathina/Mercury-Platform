@@ -1,0 +1,130 @@
+# Metrics, traces and dashboards for the platform (Phase 12). Add it to the production-like stack:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile platform up -d
+#
+#   Grafana     http://localhost:3000   (dashboards in the "Mercury" folder)
+#   Prometheus  http://localhost:9090
+#   Jaeger      http://localhost:16686  (distributed traces)
+#
+# It also switches trace export on in the four services and samples every request, which is what you want
+# for a demo or a test and not what you want in production (set TRACING_SAMPLING_PROBABILITY there).
+
+services:
+  product-service: &traced
+    environment: &traced-env
+      TRACING_EXPORT_ENABLED: "true"
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://jaeger:4318/v1/traces
+  inventory-service: *traced
+  order-service: *traced
+  notification-service: *traced
+
+  jaeger:
+    image: jaegertracing/jaeger:2.9.0          # collector (OTLP) + storage + UI in one process, in memory
+    restart: unless-stopped
+    ports: ["127.0.0.1:16686:16686"]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 384M }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:16686/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks: [data, edge]
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      - ./infrastructure/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9090/-/ready || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 384M }
+    networks: [data, edge]
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      # local use only (bound to 127.0.0.1); set GRAFANA_ADMIN_PASSWORD in .env to change it
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/mercury-overview.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on:
+      prometheus: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 320M }
+    networks: [data, edge]
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    restart: unless-stopped
+    command: ["--kafka.server=kafka:29092"]
+    depends_on:
+      kafka: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 96M }
+    networks: [data]
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-mercury}:${POSTGRES_PASSWORD:-}@postgres:5432/postgres?sslmode=disable
+      PG_EXPORTER_AUTO_DISCOVER_DATABASES: "true"
+    depends_on:
+      postgres: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 96M }
+    networks: [data]
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    restart: unless-stopped
+    privileged: true                           # reads container cgroups; metrics only, no published port
+    cgroup: host
+    command: ["--housekeeping_interval=5s", "--store_container_labels=false",
+              "--whitelisted_container_labels=com.docker.compose.service"]
+    volumes:
+      - /:/rootfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/sys:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 192M }
+    networks: [data]
+
+volumes:
+  prometheus_data:
+  grafana_data:

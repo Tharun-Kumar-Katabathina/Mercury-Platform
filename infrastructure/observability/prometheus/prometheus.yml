@@ -1,0 +1,39 @@
+global:
+  scrape_interval: 5s          # short on purpose: dashboards react within seconds in demos and load tests
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: mercury-services
+    metrics_path: /actuator/prometheus
+    metric_relabel_configs:
+      # The Prometheus client reserves the `_created` suffix, so the counter `orders.created` is exposed as
+      # `orders_total`. Restore the documented name so queries and dashboards read naturally.
+      - source_labels: [__name__]
+        regex: orders_total
+        target_label: __name__
+        replacement: orders_created_total
+    static_configs:
+      - targets: ["product-service:8081"]
+        labels: { service: product-service }
+      - targets: ["inventory-service:8082"]
+        labels: { service: inventory-service }
+      - targets: ["order-service:8083"]
+        labels: { service: order-service }
+      - targets: ["notification-service:8084"]
+        labels: { service: notification-service }
+
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka-exporter:9308"]
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: containers
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

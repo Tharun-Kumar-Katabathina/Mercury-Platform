@@ -46,11 +46,21 @@ public class OutboxEvent {
     @Column(length = 1000)
     private String lastError;
 
+    /** W3C traceparent of the writing request, or null */
+    @Column(length = 80)
+    private String traceParent;
+
     protected OutboxEvent() {
     }
 
     public static OutboxEvent of(UUID eventId, UUID aggregateId, String eventType, String payload, Instant now) {
+        return of(eventId, aggregateId, eventType, payload, now, null);
+    }
+
+    public static OutboxEvent of(
+            UUID eventId, UUID aggregateId, String eventType, String payload, Instant now, String traceParent) {
         OutboxEvent event = new OutboxEvent();
+        event.traceParent = traceParent;
         event.eventId = eventId;
         event.aggregateId = aggregateId;
         event.eventType = eventType;
@@ -75,6 +85,10 @@ public class OutboxEvent {
         this.nextAttemptAt = nextAttempt;
         this.lockedUntil = null;
         this.lastError = error == null || error.length() <= 1000 ? error : error.substring(0, 1000);
+    }
+
+    public String getTraceParent() {
+        return traceParent;
     }
 
     public Long getSeq() {

@@ -211,4 +211,19 @@ class AsyncReservationRecoveryTests {
         assertThat(orderStatus(orderId)).isEqualTo(OrderStatus.CONFIRMED);
         verify(inventoryClient, never()).findOrderReservation(orderId);
     }
+
+    @Autowired private io.micrometer.core.instrument.MeterRegistry meters;
+
+    @Test
+    void theRecoveryLagGaugeReportsHowLongADueSagaHasBeenWaiting() {
+        UUID p = product();
+        UUID orderId = acceptedOrder(p, 1);
+        OrderSaga saga = sagaRepository.findById(orderId).orElseThrow();
+        saga.awaitRetryAt(java.time.Instant.now().minus(Duration.ofMinutes(10)), "forced for the test");
+        sagaRepository.saveAndFlush(saga);
+
+        double lag = meters.get("orders.recovery.lag.seconds").gauge().value();
+
+        assertThat(lag).isGreaterThanOrEqualTo(590);    // due for ten minutes (other due sagas can only make it larger)
+    }
 }
