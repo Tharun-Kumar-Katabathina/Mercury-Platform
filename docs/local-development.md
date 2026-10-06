@@ -2,6 +2,11 @@
 
 > The Order Service (port 8083) has its own section in [order-service.md](order-service.md#12-local-development). Kafka and the Notification Service (port 8084) are covered in [event-driven-architecture.md](event-driven-architecture.md#11-local-development): `docker compose up -d postgres kafka`, then create the `mercury_notification` database once.
 
+> **Asynchronous reservation (Phase 10):** Inventory now also needs Kafka (`docker compose up -d postgres kafka`;
+> it still starts and serves REST without it). To try the ASYNC order flow start Order Service with
+> `ORDER_RESERVATION_MODE=ASYNC`, place an order (`202` + `Location`), then `GET` the `Location` until it is
+> `CONFIRMED` or `CANCELLED`. See [async-reservation.md](async-reservation.md).
+
 How to run the Product and Inventory services locally and how to run their tests.
 Requirements: Java 21, Docker. Maven is not needed; each service ships its own `./mvnw`.
 
@@ -37,6 +42,9 @@ Defaults are in each service's `src/main/resources/application.properties`.
 | `POSTGRES_USER` | `mercury` | Database user |
 | `POSTGRES_PASSWORD` | `change-me` | Database password |
 
+Inventory also reads `KAFKA_BOOTSTRAP_SERVERS` (default `localhost:9092`) and the `INVENTORY_*` Kafka, retry and
+outbox settings listed in [async-reservation.md](async-reservation.md#8-configuration-all-overridable).
+
 Inventory's schema is managed by Flyway and `ddl-auto` is fixed to `validate`. The reserve
 retry limit is the property `inventory.reserve.max-attempts` (default `5`).
 
@@ -71,7 +79,7 @@ cd services/inventory-service
 POSTGRES_PASSWORD=mercury ./mvnw spring-boot:run
 ```
 
-On first start Flyway applies `V1` and `V2` to `mercury_inventory`. Check:
+On first start Flyway applies `V1` to `V4` to `mercury_inventory`. Check:
 `curl localhost:8082/actuator/health` → `"status":"UP"`.
 
 ## 3. Start Product Service (terminal 2)
@@ -143,7 +151,7 @@ of them.
 
 | Service | Tests | Database used |
 |---|---|---|
-| Inventory | 40 | In-memory H2 (PostgreSQL mode), schema from Flyway, `ddl-auto=validate` |
+| Inventory | 77 (incl. 10 against a real Kafka broker in Testcontainers) | In-memory H2 (PostgreSQL mode), schema from Flyway, `ddl-auto=validate` |
 | Product | 27 (21 normal + 6 integration) | In-memory H2 for the 21 normal tests |
 
 Product's suite includes the real integration test (below) and therefore needs Docker. To run

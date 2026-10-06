@@ -33,7 +33,7 @@ Nothing the saga needs to remember lives only in a request thread.
 
 | Column | Purpose |
 |---|---|
-| `state` | `RESERVING`, `COMPENSATING`, `CONFIRMED`, `CANCELLED`, `RECOVERY_FAILED` |
+| `state` | `RESERVING`, `AWAITING_INVENTORY` (Phase 10, ASYNC orders), `COMPENSATING`, `CONFIRMED`, `CANCELLED`, `RECOVERY_FAILED` |
 | `attempt_count`, `last_error` | how many recovery attempts failed, and why |
 | `next_attempt_at` | when recovery should look at it next (backoff, or "abandoned after") |
 | `locked_until` | lease: who owns it right now |
@@ -242,4 +242,7 @@ configuration. Every assertion reads PostgreSQL directly.
 - Retries exist only inside recovery; the live request path still makes single attempts.
 - Circuit breaker and bulkhead state is per Order Service instance.
 - The bulkhead sheds load: a burst larger than `max-concurrent-calls` gets some `503`s by design.
-- No Kafka, Redis, payment or authentication; Product Service still has no Flyway.
+- No Redis, payment or authentication; Product Service still has no Flyway.
+- ASYNC orders (Phase 10) add the `AWAITING_INVENTORY` state and a deadline lookup; see
+  [async-reservation.md](async-reservation.md#5-the-deadline). The late-request limitation above has an ASYNC
+  counterpart, described in [async-reservation.md](async-reservation.md#11-known-limitations).

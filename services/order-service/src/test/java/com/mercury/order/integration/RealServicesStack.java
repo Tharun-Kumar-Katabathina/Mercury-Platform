@@ -38,6 +38,10 @@ final class RealServicesStack {
     static final String NOTIFICATION_DB = "mercury_notification";
     static final String EVENTS_TOPIC = "mercury.order.events";
     static final String DLQ_TOPIC = "mercury.order.events.dlq";
+    static final String INVENTORY_COMMANDS_TOPIC = "mercury.inventory.commands";
+    static final String INVENTORY_COMMANDS_DLQ_TOPIC = "mercury.inventory.commands.dlq";
+    static final String INVENTORY_EVENTS_TOPIC = "mercury.inventory.events";
+    static final String INVENTORY_EVENTS_DLQ_TOPIC = "mercury.inventory.events.dlq";
     /** used by the Order Service that runs as its own process (so it can be killed) */
     static final String ORDER_PROCESS_DB = "mercury_order_process";
 
@@ -310,7 +314,28 @@ final class RealServicesStack {
     }
 
     void startInventoryService() throws IOException, InterruptedException {
-        inventory.start(jdbcUrl(INVENTORY_DB), "INVENTORY_DB_URL");
+        inventory.startCommand(List.of(
+                        Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                        "-jar", inventory.jar().toString()),
+                inventoryEnvironment());
+    }
+
+    /** Inventory consumes reservation commands and publishes its replies, so it needs Kafka (with fast timings for tests) */
+    private java.util.Map<String, String> inventoryEnvironment() {
+        java.util.Map<String, String> environment = new java.util.HashMap<>();
+        environment.put("INVENTORY_DB_URL", jdbcUrl(INVENTORY_DB));
+        environment.put("KAFKA_BOOTSTRAP_SERVERS", kafka.bootstrapServers());
+        environment.put("INVENTORY_OUTBOX_INTERVAL", "300ms");
+        environment.put("INVENTORY_OUTBOX_LEASE", "5s");
+        environment.put("INVENTORY_OUTBOX_INITIAL_BACKOFF", "500ms");
+        environment.put("INVENTORY_OUTBOX_MAX_BACKOFF", "2s");
+        environment.put("INVENTORY_OUTBOX_SEND_TIMEOUT", "4s");
+        environment.put("KAFKA_PRODUCER_MAX_BLOCK_MS", "2000");
+        environment.put("KAFKA_PRODUCER_REQUEST_TIMEOUT_MS", "2000");
+        environment.put("KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS", "4000");
+        environment.put("INVENTORY_RETRY_INITIAL_INTERVAL", "200ms");
+        environment.put("INVENTORY_RETRY_MAX_INTERVAL", "1s");
+        return environment;
     }
 
     /** safety net for tests that stop Inventory: make sure it is running for whoever comes next */
@@ -376,7 +401,7 @@ final class RealServicesStack {
                 notification.stop();
             }));
 
-            inventory.start(jdbcUrl(INVENTORY_DB), "INVENTORY_DB_URL");
+            startInventoryService();
             product.start(jdbcUrl(PRODUCT_DB), "PRODUCT_DB_URL");
             notification.startCommand(List.of(
                             Path.of(System.getProperty("java.home"), "bin", "java").toString(),
@@ -404,7 +429,11 @@ final class RealServicesStack {
                 try {
                     admin.createTopics(List.of(
                             new org.apache.kafka.clients.admin.NewTopic(EVENTS_TOPIC, 3, (short) 1),
-                            new org.apache.kafka.clients.admin.NewTopic(DLQ_TOPIC, 1, (short) 1)))
+                            new org.apache.kafka.clients.admin.NewTopic(DLQ_TOPIC, 1, (short) 1),
+                            new org.apache.kafka.clients.admin.NewTopic(INVENTORY_COMMANDS_TOPIC, 3, (short) 1),
+                            new org.apache.kafka.clients.admin.NewTopic(INVENTORY_COMMANDS_DLQ_TOPIC, 1, (short) 1),
+                            new org.apache.kafka.clients.admin.NewTopic(INVENTORY_EVENTS_TOPIC, 3, (short) 1),
+                            new org.apache.kafka.clients.admin.NewTopic(INVENTORY_EVENTS_DLQ_TOPIC, 1, (short) 1)))
                             .all().get(10, TimeUnit.SECONDS);
                     return;
                 } catch (Exception e) {

@@ -26,6 +26,10 @@ Client --REST--> Order Service :8083 --REST--> Product :8081 / Inventory :8082
 answer now. **Kafka carries facts that already happened** (an order was created, confirmed, cancelled) to
 anyone who wants to react, without Order Service knowing who they are.
 
+> **Phase 10 update:** reservation can now also be asynchronous over Kafka (`order.reservation.mode=ASYNC`); see
+> [async-reservation.md](async-reservation.md). The text below is the Phase 9 decision, which still describes the
+> default SYNC mode.
+
 ### Decision: reservation stays synchronous (Option A)
 The Phase 8 saga is the source of truth: reservation, compensation, `order_saga`, per-item status, the recovery
 worker, optimistic locking, idempotency, the circuit breaker and the bulkhead are all unchanged and still
@@ -244,8 +248,8 @@ data are kept).
 
 ## 13. Known limitations
 
-- Reservation is still synchronous; Inventory does not consume events. Moving to asynchronous reservation is a
-  separate, larger saga redesign.
+- Reservation is synchronous by default. The asynchronous alternative (Phase 10, `order.reservation.mode=ASYNC`)
+  is described in [async-reservation.md](async-reservation.md).
 - Published outbox rows are kept forever; there is no cleanup or archiving.
 - The dead-letter topic has no replay tooling.
 - Notifications are only recorded; there is no email/SMS provider.

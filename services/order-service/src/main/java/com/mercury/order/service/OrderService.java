@@ -31,6 +31,9 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Creates orders across three systems that cannot share one transaction (Order DB, Product,
@@ -59,6 +62,19 @@ public class OrderService {
     private final OrderSagaService sagaService;
     private final Duration idempotencyWaitTimeout;
     private final ReservationProperties reservation;
+
+    /**
+     * Requests with the same Idempotency-Key that are in flight in THIS instance, one gate per key. Only one
+     * of them creates the order; the others wait and then replay its result, instead of each one reading
+     * Product first (N identical requests must not become N downstream calls). Across instances the claim's
+     * unique constraint still decides.
+     */
+    private final ConcurrentHashMap<String, KeyGate> inFlight = new ConcurrentHashMap<>();
+
+    private static final class KeyGate {
+        final ReentrantLock lock = new ReentrantLock();
+        int users;   // guarded by the map's per-key compute
+    }
 
     public OrderService(
             OrderRepository orderRepository,
@@ -94,6 +110,33 @@ public class OrderService {
 
         List<CreateOrderItemRequest> items = planner.validate(request);
         String requestHash = requestHash(items);
+
+        KeyGate gate = inFlight.compute(idempotencyKey, (k, g) -> {
+            KeyGate use = g == null ? new KeyGate() : g;
+            use.users++;
+            return use;
+        });
+        boolean locked = false;
+        try {
+            locked = gate.lock.tryLock(idempotencyWaitTimeout.toNanos(), TimeUnit.NANOSECONDS);
+            if (!locked) {
+                throw new OrderConflictException(
+                        "Another request with this Idempotency-Key is being processed; retry shortly");
+            }
+            return createOrExisting(idempotencyKey, items, requestHash);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for an in-flight order", e);
+        } finally {
+            if (locked) {
+                gate.lock.unlock();
+            }
+            inFlight.computeIfPresent(idempotencyKey, (k, g) -> --g.users == 0 ? null : g);
+        }
+    }
+
+    private OrderCreationResult createOrExisting(
+            String idempotencyKey, List<CreateOrderItemRequest> items, String requestHash) {
 
         for (int round = 0; round < MAX_ROUNDS; round++) {
 

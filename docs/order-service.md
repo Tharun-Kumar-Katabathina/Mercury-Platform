@@ -63,6 +63,10 @@ The client never sends a price. Response `201 Created`:
 A retry with the same key and payload returns the **same body, again `201`**, plus the header
 `Idempotent-Replayed: true`.
 
+**ASYNC mode (`order.reservation.mode=ASYNC`)** answers `202 Accepted` with a `Location` header and a `PENDING`
+order; a retry answers `202` while waiting and `200` (with `Idempotent-Replayed: true`) once the order is final.
+See [async-reservation.md](async-reservation.md#3-client-contract). Everything below describes the default SYNC flow.
+
 Rules: `items` must not be empty; every item needs a `productId` and `quantity >= 1`; the same
 `productId` may appear only once (send one item with the total quantity).
 
@@ -159,6 +163,12 @@ Same pattern as Inventory, adapted to a multi-step flow:
 
 Result for 100 concurrent requests with one key: 1 order, 1 reservation per item, 99 replays.
 
+**Single-flight per key (Phase 10).** Within one Order Service instance, requests with the same key pass
+through a per-key gate: one creates the order, the others wait (up to the same wait-timeout, then `409`) and
+replay its result. Before this, all N identical requests read Product before any claim existed, so a burst of
+duplicates could exceed Product's bulkhead (25 concurrent calls) and be shed with `503`; now Product is read
+once for what is a single order. Across instances the claim's unique constraint still decides, as above.
+
 Duplicate polling reads the claim through a plain projection (`ClaimView`), never a cached entity, so
 it is correct even if open-in-view is switched on (see Testing).
 
@@ -248,7 +258,12 @@ the code is `PRODUCT_REQUEST_REJECTED` / `INVENTORY_REQUEST_REJECTED`.
 | **`ResilienceIntegrationTests`** | 1 | **real stack**: Inventory outage, circuit opens, recovery after return |
 | **`EventFlowIntegrationTests`** | 7 | **real stack incl. Kafka and Notification**: order → outbox → Kafka → notification, Kafka outage, crash before publishing, duplicate and poison messages, 50 concurrent orders |
 
-Order Service: **140 tests**. (Product 27, Inventory 40, Notification 15.)
+Phase 10 adds `AsyncReservationTests` (20), `AsyncReservationRecoveryTests` (7), `AsyncOrderApiTests` (6),
+`InventoryClientTests` (+3), `InventoryEventKafkaTests` (7, real Kafka), `AsyncReservationIntegrationTests` (9, real
+stack) and `AsyncFailureInjectionIntegrationTests` (4, real stack with a killable Order process); see
+[async-reservation.md](async-reservation.md#10-tests).
+
+Order Service: **197 tests**. (Product 27, Inventory 77, Notification 15.)
 
 The integration tests start a Testcontainers PostgreSQL (`postgres:16-alpine`), build Product and Inventory
 from `../product-service` and `../inventory-service` and run each as a separate process; Order Service runs in
@@ -282,6 +297,7 @@ Ports: Order `8083`, Product `8081`, Inventory `8082`, PostgreSQL `5432`.
 | `ORDER_IDEMPOTENCY_WAIT_TIMEOUT` | `5s` |
 | `ORDER_RECOVERY_*`, `ORDER_INVENTORY_*`, `ORDER_PRODUCT_*`, `MANAGEMENT_ENDPOINTS` | see [saga-recovery.md](saga-recovery.md#8-configuration) |
 | `KAFKA_BOOTSTRAP_SERVERS`, `ORDER_OUTBOX_*`, `KAFKA_PRODUCER_*` | `localhost:9092`, see [event-driven-architecture.md](event-driven-architecture.md#10-configuration) |
+| `ORDER_RESERVATION_MODE`, `ORDER_RESERVATION_ASYNC_DEADLINE`, `ORDER_INBOUND_*`, `INVENTORY_EVENT_TOPIC` | `SYNC`, `60s`, see [async-reservation.md](async-reservation.md#8-configuration-all-overridable) |
 
 ```bash
 docker compose up -d postgres kafka
@@ -308,13 +324,13 @@ Tests (from `services/order-service`):
 ```bash
 ./mvnw clean test                                                    # everything (the integration tests need Docker)
 ./mvnw clean test -Dtest='!*IntegrationTests'                        # without Docker
-./mvnw clean test -Dtest='OrderFlowIntegrationTests,SagaRecoveryIntegrationTests,ResilienceIntegrationTests,EventFlowIntegrationTests'   # only the real-stack tests (~3 min)
+./mvnw clean test -Dtest='*IntegrationTests,InventoryEventKafkaTests'   # only the real-stack tests (~6 min)
 ```
 
 ## 13. Known limitations
 
-The failure-recovery limitations are listed in [saga-recovery.md](saga-recovery.md#11-known-limitations).
-In addition:
+The failure-recovery limitations are listed in [saga-recovery.md](saga-recovery.md#11-known-limitations) and the
+ASYNC-specific ones in [async-reservation.md](async-reservation.md#11-known-limitations). In addition:
 
 - Prices are read once, when the order is placed; a product price change between validation and
   confirmation is not detected.

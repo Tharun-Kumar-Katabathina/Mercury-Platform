@@ -209,9 +209,40 @@ final class StackClient {
         }
     }
 
+    /** Inventory's stored decision for an ASYNC order: RESERVED or REJECTED, or null when it has decided nothing */
+    String inventoryDecision(UUID orderId) throws SQLException {
+        try (Connection c = stack.open(RealServicesStack.INVENTORY_DB);
+             PreparedStatement s = c.prepareStatement("SELECT status FROM order_reservations WHERE order_id = ?")) {
+            s.setObject(1, orderId);
+            try (ResultSet rs = s.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
+            }
+        }
+    }
+
+    int inventoryRepliesWritten(UUID orderId) throws SQLException {
+        return scalar(RealServicesStack.INVENTORY_DB, "SELECT count(*) FROM inventory_outbox WHERE aggregate_id = ?", orderId);
+    }
+
+    int inventoryRepliesUnpublished(UUID orderId) throws SQLException {
+        return scalar(RealServicesStack.INVENTORY_DB,
+                "SELECT count(*) FROM inventory_outbox WHERE aggregate_id = ? AND published_at IS NULL", orderId);
+    }
+
+    int outboxOfType(String orderDb, UUID orderId, String eventType) throws SQLException {
+        return scalar(orderDb, "SELECT count(*) FROM order_outbox WHERE aggregate_id = ? AND event_type = '" + eventType + "'", orderId);
+    }
+
+    String cancelReason(String orderDb, UUID orderId) throws SQLException {
+        return string(orderDb, "SELECT payload FROM order_outbox WHERE aggregate_id = ? AND event_type = 'OrderCancelled'", orderId);
+    }
+
     void cleanUp(String orderDb, UUID... products) throws SQLException {
         for (UUID product : products) {
             for (UUID orderId : orderIdsFor(orderDb, product)) {
+                update(RealServicesStack.INVENTORY_DB, "DELETE FROM inventory_outbox WHERE aggregate_id = ?", orderId);
+                update(RealServicesStack.INVENTORY_DB, "DELETE FROM order_reservation_items WHERE order_id = ?", orderId);
+                update(RealServicesStack.INVENTORY_DB, "DELETE FROM order_reservations WHERE order_id = ?", orderId);
                 update(orderDb, "DELETE FROM order_outbox WHERE aggregate_id = ?", orderId);
                 update(RealServicesStack.NOTIFICATION_DB, "DELETE FROM notification WHERE order_id = ?", orderId);
             }

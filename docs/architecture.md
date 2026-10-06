@@ -1,7 +1,7 @@
 # Mercury Architecture (current state)
 
-This document describes what is **implemented today**. Planned pieces (Order, Payment,
-Kafka, Saga, Redis, Resilience4j) are not built and are not described here.
+This document describes what is **implemented today**. Planned pieces (Payment,
+Redis) are not built and are not described here.
 
 ## Services and ports
 
@@ -11,7 +11,7 @@ Kafka, Saga, Redis, Resilience4j) are not built and are not described here.
 | Inventory Service | 8082 | Stock and idempotency records (`inventory`, `idempotency_records`, database `mercury_inventory`) | Spring Boot 4.0.8, Java 21 |
 | Order Service | 8083 | Orders, order items, order idempotency records (`orders`, `order_items`, `order_idempotency_records`, database `mercury_order`) | Spring Boot 4.0.8, Java 21; see [Order Service](order-service.md) |
 | Notification Service | 8084 | Notifications (`notification`, database `mercury_notification`) | consumes order events from Kafka; see [Event-driven architecture](event-driven-architecture.md) |
-| Kafka | 9092 | Durable domain events (`mercury.order.events`, `mercury.order.events.dlq`) | `apache/kafka:3.9.0`, KRaft mode, via `docker-compose.yml` |
+| Kafka | 9092 | Durable domain events and reservation messages (`mercury.order.events`, `mercury.inventory.commands`, `mercury.inventory.events`, and a `.dlq` for each) | `apache/kafka:3.9.0`, KRaft mode, via `docker-compose.yml` |
 | PostgreSQL | 5432 | One database per service, in one server | `postgres:17` via `docker-compose.yml` |
 
 Every service exposes Spring Actuator health at `/actuator/health`.
@@ -22,7 +22,12 @@ REST is used where the caller needs the answer now (validating products, reservi
 **events about things that already happened**: Order Service writes `OrderCreated`, `OrderConfirmed` and
 `OrderCancelled` to a transactional outbox in the same database transaction as the state change, and a
 publisher sends them to Kafka. The Notification Service consumes them idempotently. The Phase 8 saga is
-unchanged and remains the source of truth for reservation and recovery.
+unchanged and remains the default (`order.reservation.mode=SYNC`).
+
+In **ASYNC** mode (Phase 10) reservation itself is asynchronous: Order writes an `InventoryReservationRequested`
+command to its outbox, Inventory reserves the whole order atomically and answers with `InventoryReserved` or
+`InventoryRejected` through its own outbox, and Order finishes the order when the reply arrives (or asks Inventory
+directly after a deadline). See [Asynchronous inventory reservation](async-reservation.md).
 
 ## Request flow
 
@@ -83,6 +88,7 @@ client timeouts, and (in Order Service) a circuit breaker, a bulkhead and a dura
   error propagation, concurrency.
 - [Order Service](order-service.md): order creation saga, idempotency, compensation.
 - [Event-driven architecture](event-driven-architecture.md): Kafka topology, event contracts, outbox, consumer idempotency, dead-lettering.
+- [Asynchronous inventory reservation](async-reservation.md): Phase 10, the ASYNC order flow, deadline recovery, late reservations.
 - [Saga reliability and recovery](saga-recovery.md): durable saga state, recovery worker, circuit breaker, failure scenarios.
 - [Local development](local-development.md): starting everything, environment variables,
   running the tests, caveats.

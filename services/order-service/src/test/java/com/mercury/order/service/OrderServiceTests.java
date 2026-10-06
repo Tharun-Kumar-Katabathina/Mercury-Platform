@@ -358,6 +358,22 @@ class OrderServiceTests {
         assertThat(ordersFor(a)).isEqualTo(1);
     }
 
+    @Test
+    void identicalConcurrentRequestsReadProductOnceNotOncePerRequest() throws Exception {
+        UUID a = product("A", "10.00");
+        String key = key();
+        CreateOrderRequest request = order(item(a, 1));
+
+        List<Outcome<OrderCreationResult>> outcomes = ConcurrentRunner.runAll(100,
+                i -> () -> orderService.createOrder(key, request));
+
+        assertThat(outcomes).allMatch(Outcome::succeeded);
+        // one request creates the order; the other 99 wait for it and replay it, so Product is not
+        // hit 100 times (its bulkhead would shed the excess) for what is a single order
+        verify(productClient, times(1)).getProduct(a);
+        assertThat(ordersFor(a)).isEqualTo(1);
+    }
+
     // ---- compensation when the ORDER side fails -------------------------------------------
 
     @Test
