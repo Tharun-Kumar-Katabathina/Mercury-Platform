@@ -25,6 +25,13 @@ public class GlobalExceptionHandler {
         return body(404, "RESERVATION_NOT_FOUND", exception.getMessage());
     }
 
+    @ExceptionHandler(OrderReservationNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public Map<String, Object> handleOrderReservationNotFound(OrderReservationNotFoundException exception) {
+
+        return body(404, "ORDER_RESERVATION_NOT_FOUND", exception.getMessage());
+    }
+
     @ExceptionHandler(DuplicateInventoryException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     public Map<String, Object> handleDuplicateInventory(
