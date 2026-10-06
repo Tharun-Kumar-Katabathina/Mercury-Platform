@@ -1,38 +1,74 @@
+# Mercury platform, production-like.
+#
+#   cp .env.example .env            # set POSTGRES_PASSWORD (scripts/platform-up.sh checks it)
+#   docker compose -f docker-compose.yml --profile platform up -d --build
+#
+# Infrastructure (postgres, kafka, qdrant) has no profile and always starts; the four services are in the
+# "platform" profile, so `docker compose up -d postgres kafka` still gives the local-development infrastructure.
+#
+# docker-compose.override.yml (picked up automatically unless you pass -f) only adds developer
+# conveniences: host ports for Postgres/Kafka/Qdrant and a default dev password. Production-like runs
+# use `-f docker-compose.yml`, where the data tier is reachable only from inside the `data` network.
+
+name: mercury-platform
+
+x-service: &service
+  restart: unless-stopped
+  read_only: true                      # the root filesystem is immutable ...
+  tmpfs:
+    - /tmp:size=64m,mode=1777          # ... except a small scratch area (Tomcat work dir)
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  stop_grace_period: 40s               # > the 25s graceful-shutdown phase configured in the services
+  init: false                          # java is PID 1 and handles SIGTERM itself
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+  networks: [data, edge]
+
+x-java-env: &java-env
+  POSTGRES_USER: ${POSTGRES_USER:-mercury}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+  KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+  SHUTDOWN_TIMEOUT: 25s
 
 services:
+  # ---- infrastructure ----------------------------------------------------------------------------
   postgres:
     image: postgres:17
-    container_name: mercury-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: mercury
-      POSTGRES_PASSWORD: mercury
+      POSTGRES_USER: ${POSTGRES_USER:-mercury}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_DB: mercury
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mercury -d mercury"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d mercury"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 12
+      start_period: 10s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 384M }
+    shm_size: 128m
+    networks: [data]
 
   kafka:
-    # Single-node Kafka in KRaft mode (no ZooKeeper).
-    # From the host:            localhost:9092   (KAFKA_BOOTSTRAP_SERVERS default in the services)
-    # From other containers:    kafka:29092
+    # Single-node Kafka in KRaft mode (no ZooKeeper). Inside the network: kafka:29092.
     image: apache/kafka:3.9.0
-    container_name: mercury-kafka
     restart: unless-stopped
-    ports:
-      - "9092:9092"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:9093,EXTERNAL://:9092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,EXTERNAL://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
@@ -41,15 +77,128 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx384m
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 > /dev/null 2>&1"]
       interval: 10s
       timeout: 10s
       retries: 10
       start_period: 20s
+    deploy:
+      resources:
+        limits: { cpus: "1.5", memory: 640M }
+    networks: [data]
+
+  qdrant:
+    # Vector database for the recommendation service (Phase 16).
+    image: qdrant/qdrant:v1.19.1
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 384M }
+    networks: [data]
+
+  # ---- services (profile "platform") ---------------------------------------------------------------
+  product-service:
+    <<: *service
+    profiles: [platform]
+    build:
+      context: ./services/product-service
+      dockerfile: ../../infrastructure/docker/Dockerfile.service
+      args: { SERVICE: product-service, PORT: "8081" }
+    image: mercury/product-service:${MERCURY_VERSION:-dev}
+    environment:
+      <<: *java-env
+      PRODUCT_DB_URL: jdbc:postgresql://postgres:5432/mercury_product
+      INVENTORY_SERVICE_URL: http://inventory-service:8082
+    depends_on:
+      postgres: { condition: service_healthy }
+    ports: ["127.0.0.1:8081:8081"]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 448M }
+
+  inventory-service:
+    <<: *service
+    profiles: [platform]
+    build:
+      context: ./services/inventory-service
+      dockerfile: ../../infrastructure/docker/Dockerfile.service
+      args: { SERVICE: inventory-service, PORT: "8082" }
+    image: mercury/inventory-service:${MERCURY_VERSION:-dev}
+    environment:
+      <<: *java-env
+      INVENTORY_DB_URL: jdbc:postgresql://postgres:5432/mercury_inventory
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    ports: ["127.0.0.1:8082:8082"]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  order-service:
+    <<: *service
+    profiles: [platform]
+    build:
+      context: ./services/order-service
+      dockerfile: ../../infrastructure/docker/Dockerfile.service
+      args: { SERVICE: order-service, PORT: "8083" }
+    image: mercury/order-service:${MERCURY_VERSION:-dev}
+    environment:
+      <<: *java-env
+      ORDER_DB_URL: jdbc:postgresql://postgres:5432/mercury_order
+      PRODUCT_SERVICE_URL: http://product-service:8081
+      INVENTORY_SERVICE_URL: http://inventory-service:8082
+      ORDER_RESERVATION_MODE: ${ORDER_RESERVATION_MODE:-SYNC}
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      product-service: { condition: service_healthy }
+      inventory-service: { condition: service_healthy }
+    ports: ["127.0.0.1:8083:8083"]
+    deploy:
+      resources:
+        limits: { cpus: "1.5", memory: 512M }
+
+  notification-service:
+    <<: *service
+    profiles: [platform]
+    build:
+      context: ./services/notification-service
+      dockerfile: ../../infrastructure/docker/Dockerfile.service
+      args: { SERVICE: notification-service, PORT: "8084" }
+    image: mercury/notification-service:${MERCURY_VERSION:-dev}
+    environment:
+      <<: *java-env
+      NOTIFICATION_DB_URL: jdbc:postgresql://postgres:5432/mercury_notification
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    ports: ["127.0.0.1:8084:8084"]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 448M }
+
+networks:
+  # The data tier (Postgres, Kafka, Qdrant) lives here only. `internal` means no route to the outside world
+  # and no published ports: only containers attached to this network can reach it.
+  data:
+    internal: true
+  # What the services use to be reachable from the host (127.0.0.1 only) and to call out.
+  edge: {}
 
 volumes:
   postgres_data:
   kafka_data:
+  qdrant_data:

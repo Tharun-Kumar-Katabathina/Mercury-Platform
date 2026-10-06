@@ -1,0 +1,58 @@
+# Vector database for the recommendation service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  labels: { app.kubernetes.io/name: qdrant, app.kubernetes.io/part-of: mercury, mercury/tier: data }
+spec:
+  clusterIP: None
+  selector: { app.kubernetes.io/name: qdrant }
+  ports:
+    - { name: http, port: 6333 }
+    - { name: grpc, port: 6334 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: qdrant
+  labels: { app.kubernetes.io/name: qdrant, app.kubernetes.io/part-of: mercury, mercury/tier: data }
+spec:
+  serviceName: qdrant
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: qdrant }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: qdrant, app.kubernetes.io/part-of: mercury, mercury/tier: data }
+    spec:
+      terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.19.1
+          ports:
+            - { name: http, containerPort: 6333 }
+            - { name: grpc, containerPort: 6334 }
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits:   { cpu: "1", memory: 512Mi }
+          readinessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 20
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: storage, mountPath: /qdrant/storage }
+  volumeClaimTemplates:
+    - metadata: { name: storage }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: 2Gi } }

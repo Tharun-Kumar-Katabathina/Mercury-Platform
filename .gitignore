@@ -11,3 +11,6 @@ __pycache__/
 .terraform/
 *.tfstate
 *.tfstate.*
+
+# Kubernetes secrets generated locally
+infrastructure/kubernetes/**/secrets.env

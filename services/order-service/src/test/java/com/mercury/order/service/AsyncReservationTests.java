@@ -174,7 +174,7 @@ class AsyncReservationTests {
         assertThat(itemRepository.countHeld(orderId)).isEqualTo(1);   // held for the confirmed order
         assertThat(eventTypes(orderId)).containsExactly(
                 "OrderCreated", "InventoryReservationRequested", "OrderConfirmed");
-        verify(inventoryClient, never()).release(any(), anyInt(), anyString());
+        verify(inventoryClient, never()).release(eq(p), anyInt(), anyString());
     }
 
     @Test
@@ -206,7 +206,7 @@ class AsyncReservationTests {
                 .containsExactly("OrderCreated", "InventoryReservationRequested", "OrderCancelled");
         assertThat(json.readTree(events.get(2).getPayload()).path("reason").asString())
                 .isEqualTo("INSUFFICIENT_STOCK");
-        verify(inventoryClient, never()).release(any(), anyInt(), anyString());   // nothing was reserved
+        verify(inventoryClient, never()).release(eq(p), anyInt(), anyString());   // nothing was reserved
     }
 
     @Test
@@ -334,7 +334,9 @@ class AsyncReservationTests {
         UUID orderId = accepted(p, 1, key()).order().id();
         handler.handle(rejected(UUID.randomUUID(), orderId, p, "RESERVATION_TIMEOUT"));
         handler.handle(reserved(UUID.randomUUID(), orderId, p, 1));
-        when(inventoryClient.release(any(), anyInt(), anyString()))
+        // only for this order's product: the database is shared with other tests, whose leftover work a recovery
+        // pass may also pick up, and it must not consume this one-shot failure
+        when(inventoryClient.release(eq(p), anyInt(), anyString()))
                 .thenThrow(new com.mercury.order.exception.InventoryServiceException(
                         org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, null))
                 .thenReturn(new InventoryOperationResult(false));
@@ -360,7 +362,7 @@ class AsyncReservationTests {
 
         assertThat(again).isEqualTo(InboundResult.IGNORED);
         assertThat(orderStatus(orderId)).isEqualTo(OrderStatus.CONFIRMED);
-        verify(inventoryClient, never()).release(any(), anyInt(), anyString());
+        verify(inventoryClient, never()).release(eq(p), anyInt(), anyString());
     }
 
     @Test

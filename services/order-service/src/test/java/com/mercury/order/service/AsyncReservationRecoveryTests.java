@@ -110,7 +110,7 @@ class AsyncReservationRecoveryTests {
         assertThat(orderStatus(orderId)).isEqualTo(OrderStatus.CONFIRMED);
         assertThat(itemRepository.countHeld(orderId)).isEqualTo(1);
         assertThat(eventTypes(orderId)).contains("OrderConfirmed");
-        verify(inventoryClient, never()).release(any(), anyInt(), anyString());
+        verify(inventoryClient, never()).release(eq(p), anyInt(), anyString());
     }
 
     @Test
@@ -126,7 +126,7 @@ class AsyncReservationRecoveryTests {
         OutboxEvent cancelled = outbox.findByAggregateIdOrderBySeq(orderId).stream()
                 .filter(e -> e.getEventType().equals("OrderCancelled")).findFirst().orElseThrow();
         assertThat(json.readTree(cancelled.getPayload()).path("reason").asString()).isEqualTo("INSUFFICIENT_STOCK");
-        verify(inventoryClient, never()).release(any(), anyInt(), anyString());
+        verify(inventoryClient, never()).release(eq(p), anyInt(), anyString());
     }
 
     @Test

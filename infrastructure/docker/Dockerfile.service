@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1.7
+#
+# One standardized image recipe for every Spring Boot service (Product, Inventory, Order, Notification).
+# Build context = the service's own directory (services/<name>); see docker-compose.yml.
+#
+#   docker build -f infrastructure/docker/Dockerfile.service \
+#       --build-arg SERVICE=order-service --build-arg PORT=8083 services/order-service
+#
+# Stage 1 builds the jar with the service's own Maven wrapper (dependencies are cached between builds).
+# Stage 2 splits the jar into layers, so a code change only rewrites the small "application" layer.
+# Stage 3 is a JRE-only runtime: non-root user, no build tools, read-only-root-filesystem friendly.
+
+ARG JAVA_VERSION=21
+
+# ---- 1. build ----------------------------------------------------------------------------------
+FROM eclipse-temurin:${JAVA_VERSION}-jdk AS build
+WORKDIR /workspace
+COPY .mvn/ .mvn/
+COPY mvnw pom.xml ./
+RUN --mount=type=cache,target=/root/.m2,sharing=locked ./mvnw -B -q dependency:go-offline
+COPY src/ src/
+RUN --mount=type=cache,target=/root/.m2,sharing=locked ./mvnw -B -q package -DskipTests \
+    && mv target/*.jar application.jar
+
+# ---- 2. split into layers ----------------------------------------------------------------------
+FROM eclipse-temurin:${JAVA_VERSION}-jdk AS layers
+WORKDIR /layers
+COPY --from=build /workspace/application.jar .
+RUN java -Djarmode=tools -jar application.jar extract --layers --destination extracted
+
+# ---- 3. runtime --------------------------------------------------------------------------------
+FROM eclipse-temurin:${JAVA_VERSION}-jre-alpine AS runtime
+ARG SERVICE
+ARG PORT=8080
+LABEL org.opencontainers.image.title="mercury-${SERVICE}" \
+      org.opencontainers.image.source="https://github.com/Tharun-Kumar-Katabathina/Mercury-Platform"
+
+# fixed, non-privileged uid/gid so Kubernetes can enforce runAsNonRoot / runAsUser
+RUN addgroup -g 10001 -S mercury && adduser -u 10001 -S -G mercury -H -s /sbin/nologin mercury
+WORKDIR /app
+COPY --from=layers --chown=mercury:mercury /layers/extracted/dependencies/ ./
+COPY --from=layers --chown=mercury:mercury /layers/extracted/spring-boot-loader/ ./
+COPY --from=layers --chown=mercury:mercury /layers/extracted/snapshot-dependencies/ ./
+COPY --from=layers --chown=mercury:mercury /layers/extracted/application/ ./
+USER 10001:10001
+
+ENV SERVER_PORT=${PORT} \
+    JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom"
+EXPOSE ${PORT}
+
+# readiness = ready for traffic; the orchestrator's own probes use the same endpoint
+HEALTHCHECK --interval=10s --timeout=3s --start-period=60s --retries=5 \
+    CMD wget -q -O /dev/null "http://127.0.0.1:${SERVER_PORT}/actuator/health/readiness" || exit 1
+
+# exec form: java is PID 1 and receives SIGTERM, which triggers Spring's graceful shutdown
+ENTRYPOINT ["java", "-jar", "application.jar"]

@@ -1,0 +1,43 @@
+# Developer conveniences, applied automatically by `docker compose up` (NOT by `-f docker-compose.yml`).
+# Lets services started from your IDE / `./mvnw spring-boot:run` reach the infrastructure on localhost.
+
+services:
+  postgres:
+    container_name: mercury-postgres
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mercury}
+    ports:
+      - "127.0.0.1:5432:5432"
+    networks: [data, dev]
+
+  kafka:
+    container_name: mercury-kafka
+    # From the host: localhost:9092 (the KAFKA_BOOTSTRAP_SERVERS default in the services).
+    environment:
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:9093,EXTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+    ports:
+      - "127.0.0.1:9092:9092"
+    networks: [data, dev]
+
+  qdrant:
+    container_name: mercury-qdrant
+    ports:
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+    networks: [data, dev]
+
+  product-service:
+    environment: &dev-password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mercury}
+  inventory-service:
+    environment: *dev-password
+  order-service:
+    environment: *dev-password
+  notification-service:
+    environment: *dev-password
+
+networks:
+  # published ports need a non-internal network
+  dev: {}

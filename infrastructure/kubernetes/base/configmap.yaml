@@ -1,0 +1,26 @@
+# Non-secret configuration shared by the services. Credentials live in the mercury-secrets Secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mercury-config
+data:
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  PRODUCT_DB_URL: jdbc:postgresql://postgres:5432/mercury_product
+  INVENTORY_DB_URL: jdbc:postgresql://postgres:5432/mercury_inventory
+  ORDER_DB_URL: jdbc:postgresql://postgres:5432/mercury_order
+  NOTIFICATION_DB_URL: jdbc:postgresql://postgres:5432/mercury_notification
+  PRODUCT_SERVICE_URL: http://product-service:8081
+  INVENTORY_SERVICE_URL: http://inventory-service:8082
+  ORDER_RESERVATION_MODE: SYNC
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+data:
+  10-init-databases.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    for db in mercury_product mercury_inventory mercury_order mercury_notification mercury_recommendation; do
+      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres -c "CREATE DATABASE $db OWNER $POSTGRES_USER"
+    done

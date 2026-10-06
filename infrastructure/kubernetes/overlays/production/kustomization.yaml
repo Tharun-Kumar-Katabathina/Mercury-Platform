@@ -1,0 +1,15 @@
+# Production-like: two or more replicas of every service, pinned image tags (set by CI to the git SHA).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - { name: mercury/product-service,      newName: ghcr.io/tharun-kumar-katabathina/mercury-product-service,      newTag: dev }
+  - { name: mercury/inventory-service,    newName: ghcr.io/tharun-kumar-katabathina/mercury-inventory-service,    newTag: dev }
+  - { name: mercury/order-service,        newName: ghcr.io/tharun-kumar-katabathina/mercury-order-service,        newTag: dev }
+  - { name: mercury/notification-service, newName: ghcr.io/tharun-kumar-katabathina/mercury-notification-service, newTag: dev }
+patches:
+  - target: { kind: HorizontalPodAutoscaler, name: order-service }
+    patch: |-
+      - { op: replace, path: /spec/minReplicas, value: 3 }
+      - { op: replace, path: /spec/maxReplicas, value: 10 }

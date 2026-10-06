@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: mercury
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - postgres.yaml
+  - kafka.yaml
+  - qdrant.yaml
+  - product-service.yaml
+  - inventory-service.yaml
+  - order-service.yaml
+  - notification-service.yaml
+  - networkpolicy.yaml
+
+# Credentials are never committed. Create secrets.env from secrets.env.example, or run
+# scripts/k8s-create-secrets.sh, which writes random values. A missing file fails the build on purpose.
+secretGenerator:
+  - name: mercury-secrets
+    envs:
+      - secrets.env
+generatorOptions:
+  disableNameSuffixHash: true

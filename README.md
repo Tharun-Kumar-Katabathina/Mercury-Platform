@@ -20,4 +20,5 @@ Microservices e-commerce platform.
 - [Event-driven architecture](docs/event-driven-architecture.md): Kafka, transactional outbox, idempotent consumer, dead-lettering
 - [Asynchronous inventory reservation](docs/async-reservation.md): Phase 10, ASYNC order flow over Kafka, deadline recovery, late reservations
 - [Saga reliability and recovery](docs/saga-recovery.md): durable saga state, recovery worker, circuit breaker, failure scenarios
+- [Production infrastructure](docs/infrastructure.md): Docker images, production-like Compose stack, Kubernetes manifests, health and graceful shutdown
 - [Local development](docs/local-development.md): run the services, run the tests

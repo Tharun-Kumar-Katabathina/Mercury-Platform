@@ -1,0 +1,128 @@
+# order-service: Deployment, Service, HorizontalPodAutoscaler, PodDisruptionBudget.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  labels: { app.kubernetes.io/name: order-service, app.kubernetes.io/part-of: mercury, mercury/tier: app }
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }     # never drop below the desired number of ready pods
+  selector:
+    matchLabels: { app.kubernetes.io/name: order-service }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: order-service, app.kubernetes.io/part-of: mercury, mercury/tier: app }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /actuator/prometheus
+        prometheus.io/port: "8083"
+    spec:
+      terminationGracePeriodSeconds: 45                   # > preStop (5s) + graceful shutdown phase (25s)
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app.kubernetes.io/name: order-service }
+      containers:
+        - name: order-service
+          image: mercury/order-service:dev                        # set per environment by the overlay (images:)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8083 }
+          env:
+            - { name: SERVER_PORT, value: "8083" }
+            - { name: KAFKA_BOOTSTRAP_SERVERS, valueFrom: { configMapKeyRef: { name: mercury-config, key: KAFKA_BOOTSTRAP_SERVERS } } }
+            - { name: SHUTDOWN_TIMEOUT, value: 25s }
+            - { name: POSTGRES_USER, valueFrom: { secretKeyRef: { name: mercury-secrets, key: POSTGRES_USER } } }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: mercury-secrets, key: POSTGRES_PASSWORD } } }
+            - name: ORDER_DB_URL
+              valueFrom:
+                configMapKeyRef: { name: mercury-config, key: ORDER_DB_URL }
+            - name: PRODUCT_SERVICE_URL
+              valueFrom:
+                configMapKeyRef: { name: mercury-config, key: PRODUCT_SERVICE_URL }
+            - name: INVENTORY_SERVICE_URL
+              valueFrom:
+                configMapKeyRef: { name: mercury-config, key: INVENTORY_SERVICE_URL }
+            - name: ORDER_RESERVATION_MODE
+              valueFrom:
+                configMapKeyRef: { name: mercury-config, key: ORDER_RESERVATION_MODE }
+          resources:
+            requests: { cpu: 150m, memory: 256Mi }
+            limits:   { cpu: 1500m, memory: 512Mi }
+          # startup: allow a slow first start without the liveness probe killing the pod
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 5
+            failureThreshold: 36
+          # liveness: the process is wedged -> restart it (never depends on the database or Kafka)
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # readiness: take it out of the Service while the database is unreachable
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec: { command: ["sleep", "5"] }           # let endpoint removal propagate before SIGTERM
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  labels: { app.kubernetes.io/name: order-service, app.kubernetes.io/part-of: mercury }
+spec:
+  selector: { app.kubernetes.io/name: order-service }
+  ports:
+    - { name: http, port: 8083, targetPort: http }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: order-service
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: order-service }
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
+    - type: Resource
+      resource: { name: memory, target: { type: Utilization, averageUtilization: 80 } }
+  behavior:
+    scaleUp:   { stabilizationWindowSeconds: 30, policies: [ { type: Pods, value: 2, periodSeconds: 30 } ] }
+    scaleDown: { stabilizationWindowSeconds: 300, policies: [ { type: Pods, value: 1, periodSeconds: 60 } ] }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: order-service
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: order-service }

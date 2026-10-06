@@ -1,0 +1,63 @@
+# Default deny for everything in the namespace, then open exactly the paths the platform uses.
+# (Enforced only by a CNI that implements NetworkPolicy, e.g. Calico or Cilium.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# the data tier accepts connections only from the application pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: data-tier-from-apps
+spec:
+  podSelector:
+    matchLabels: { mercury/tier: data }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { mercury/tier: app }
+      ports:
+        - { port: 5432 }
+        - { port: 9092 }
+        - { port: 6333 }
+        - { port: 6334 }
+    - from:
+        - podSelector:
+            matchLabels: { mercury/tier: data }     # Kafka's controller talks to itself
+      ports:
+        - { port: 9092 }
+        - { port: 9093 }
+---
+# services call each other (Product -> Inventory, Order -> Product/Inventory); ingress/monitoring reach the HTTP ports
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: apps-ingress
+spec:
+  podSelector:
+    matchLabels: { mercury/tier: app }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { mercury/tier: app }
+      ports:
+        - { port: 8081 }
+        - { port: 8082 }
+        - { port: 8083 }
+        - { port: 8084 }
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: ingress-nginx }
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: monitoring }
+      ports:
+        - { port: 8081 }
+        - { port: 8082 }
+        - { port: 8083 }
+        - { port: 8084 }
