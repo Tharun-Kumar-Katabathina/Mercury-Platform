@@ -1,9 +1,12 @@
 package com.mercury.product.service;
 
+import com.mercury.product.client.InventoryClient;
 import com.mercury.product.dto.CreateProductRequest;
+import com.mercury.product.dto.InventoryReservationResult;
 import com.mercury.product.dto.ProductResponse;
 import com.mercury.product.dto.UpdateProductRequest;
 import com.mercury.product.exception.DuplicateSkuException;
+import com.mercury.product.exception.MissingIdempotencyKeyException;
 import com.mercury.product.exception.ProductNotFoundException;
 import com.mercury.product.model.Product;
 import com.mercury.product.repository.ProductRepository;
@@ -18,9 +21,13 @@ import java.util.UUID;
 public class ProductService {
 
     private final ProductRepository productRepository;
+    private final InventoryClient inventoryClient;
 
-    public ProductService(ProductRepository productRepository) {
+    public ProductService(
+            ProductRepository productRepository,
+            InventoryClient inventoryClient) {
         this.productRepository = productRepository;
+        this.inventoryClient = inventoryClient;
     }
 
     @Transactional
@@ -87,5 +94,30 @@ public class ProductService {
                 .orElseThrow(() -> new ProductNotFoundException(id));
 
         productRepository.delete(existingProduct);
+    }
+
+    /**
+     * Reserves stock for a product. Product Service only checks the product exists; stock
+     * itself is owned by Inventory Service, which also owns idempotency, so the caller's key
+     * is forwarded untouched.
+     *
+     * Deliberately not @Transactional: no database connection should stay open while we
+     * wait on another service. Inventory is never created here: a product without an
+     * inventory record surfaces as Inventory's own 404.
+     */
+    public InventoryReservationResult reserveProduct(
+            UUID productId,
+            int quantity,
+            String idempotencyKey) {
+
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new MissingIdempotencyKeyException();
+        }
+
+        if (!productRepository.existsById(productId)) {
+            throw new ProductNotFoundException(productId);
+        }
+
+        return inventoryClient.reserveInventory(productId, quantity, idempotencyKey);
     }
 }
