@@ -2,6 +2,10 @@ package com.mercury.order.service;
 
 import com.mercury.order.config.RecoveryProperties;
 import com.mercury.order.dto.OrderResponse;
+import com.mercury.order.event.OrderCancelledEvent;
+import com.mercury.order.event.OrderConfirmedEvent;
+import com.mercury.order.event.OrderCreatedEvent;
+import com.mercury.order.outbox.OutboxWriter;
 import com.mercury.order.model.ClaimStatus;
 import com.mercury.order.model.Order;
 import com.mercury.order.model.OrderIdempotencyRecord;
@@ -45,6 +49,7 @@ public class OrderTransactions {
     private final JsonMapper jsonMapper;
     private final RecoveryProperties recovery;
     private final Clock clock;
+    private final OutboxWriter outbox;
 
     public OrderTransactions(
             OrderRepository orderRepository,
@@ -53,7 +58,8 @@ public class OrderTransactions {
             OrderSagaRepository sagaRepository,
             JsonMapper jsonMapper,
             RecoveryProperties recovery,
-            Clock clock) {
+            Clock clock,
+            OutboxWriter outbox) {
         this.orderRepository = orderRepository;
         this.itemRepository = itemRepository;
         this.claimRepository = claimRepository;
@@ -61,6 +67,7 @@ public class OrderTransactions {
         this.jsonMapper = jsonMapper;
         this.recovery = recovery;
         this.clock = clock;
+        this.outbox = outbox;
     }
 
     private Instant now() {
@@ -90,6 +97,14 @@ public class OrderTransactions {
         sagaRepository.saveAndFlush(OrderSaga.start(
                 order.getId(), now().plus(recovery.staleAfter()), now().plus(recovery.lease())));
 
+        // the event commits (or rolls back) together with the order it describes
+        outbox.append(OrderCreatedEvent.of(order.getId(), now(),
+                draft.items().stream()
+                        .map(i -> new OrderCreatedEvent.Item(
+                                i.productId(), i.quantity(), i.productName(), i.sku(), i.unitPrice()))
+                        .toList(),
+                draft.totalAmount()));
+
         return order.getId();
     }
 
@@ -112,6 +127,8 @@ public class OrderTransactions {
         saga.confirmed();
         sagaRepository.saveAndFlush(saga);
 
+        outbox.append(OrderConfirmedEvent.of(orderId, now()));
+
         return response;
     }
 
@@ -129,8 +146,11 @@ public class OrderTransactions {
         claimRepository.deleteByOrderId(orderId);
 
         OrderSaga saga = sagaRepository.findById(orderId).orElseThrow();
+        String reason = saga.getFailureReason() == null ? "UNKNOWN" : saga.getFailureReason();
         saga.cancelled();
         sagaRepository.saveAndFlush(saga);
+
+        outbox.append(OrderCancelledEvent.of(orderId, now(), reason));
     }
 
     // ---- durable saga progress -------------------------------------------------------------
@@ -156,9 +176,9 @@ public class OrderTransactions {
     }
 
     @Transactional
-    public void beginCompensation(UUID orderId) {
+    public void beginCompensation(UUID orderId, String reason) {
         OrderSaga saga = sagaRepository.findById(orderId).orElseThrow();
-        saga.beginCompensation();
+        saga.beginCompensation(reason);
         sagaRepository.saveAndFlush(saga);
     }
 

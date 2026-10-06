@@ -17,5 +17,6 @@ Microservices e-commerce platform.
 - [Architecture](docs/architecture.md): services, ports, ownership
 - [Product to Inventory reservation flow](docs/product-inventory-flow.md): API, idempotency, errors, concurrency
 - [Order Service](docs/order-service.md): order creation saga, idempotency, compensation
+- [Event-driven architecture](docs/event-driven-architecture.md): Kafka, transactional outbox, idempotent consumer, dead-lettering
 - [Saga reliability and recovery](docs/saga-recovery.md): durable saga state, recovery worker, circuit breaker, failure scenarios
 - [Local development](docs/local-development.md): run the services, run the tests

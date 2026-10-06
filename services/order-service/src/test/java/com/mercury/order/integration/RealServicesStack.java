@@ -35,6 +35,9 @@ final class RealServicesStack {
     static final String ORDER_DB = "mercury_order";
     static final String PRODUCT_DB = "mercury_product";
     static final String INVENTORY_DB = "mercury_inventory";
+    static final String NOTIFICATION_DB = "mercury_notification";
+    static final String EVENTS_TOPIC = "mercury.order.events";
+    static final String DLQ_TOPIC = "mercury.order.events.dlq";
     /** used by the Order Service that runs as its own process (so it can be killed) */
     static final String ORDER_PROCESS_DB = "mercury_order_process";
 
@@ -49,6 +52,8 @@ final class RealServicesStack {
     private final ServiceProcess inventory;
     private final ServiceProcess product;
     private final ServiceProcess orderProcess;
+    private final ServiceProcess notification;
+    private final KafkaTestBroker kafka = new KafkaTestBroker();
 
     /** One real service running as its own process. */
     private final class ServiceProcess {
@@ -183,6 +188,7 @@ final class RealServicesStack {
         this.inventory = new ServiceProcess("inventory-service");
         this.product = new ServiceProcess("product-service");
         this.orderProcess = new ServiceProcess("order-service");
+        this.notification = new ServiceProcess("notification-service");
 
         // Not stopped explicitly: the Spring context still holds pooled connections until the JVM
         // exits. Testcontainers' Ryuk sidecar removes the container when this JVM is gone.
@@ -217,6 +223,11 @@ final class RealServicesStack {
      * production one), with fast recovery settings. Used to kill it mid-saga.
      */
     void startOrderProcess(String inventoryUrl) throws IOException, InterruptedException {
+        startOrderProcess(inventoryUrl, java.util.Map.of());
+    }
+
+    void startOrderProcess(String inventoryUrl, java.util.Map<String, String> extraEnvironment)
+            throws IOException, InterruptedException {
         String classpath = java.util.Arrays.stream(
                         System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"))
                                 .split(File.pathSeparator))
@@ -236,11 +247,50 @@ final class RealServicesStack {
         environment.put("HTTP_CLIENT_READ_TIMEOUT", "30s");
         environment.put("ORDER_INVENTORY_CB_WINDOW", "1000");
         environment.put("ORDER_INVENTORY_CB_MIN_CALLS", "1000");
+        environment.put("KAFKA_BOOTSTRAP_SERVERS", kafka.bootstrapServers());
+        environment.put("ORDER_OUTBOX_INTERVAL", "500ms");
+        environment.put("ORDER_OUTBOX_LEASE", "5s");
+        environment.put("ORDER_OUTBOX_INITIAL_BACKOFF", "500ms");
+        environment.put("ORDER_OUTBOX_MAX_BACKOFF", "2s");
+        environment.put("KAFKA_PRODUCER_MAX_BLOCK_MS", "2000");
+        environment.put("KAFKA_PRODUCER_REQUEST_TIMEOUT_MS", "2000");
+        environment.put("KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS", "4000");
+        environment.put("ORDER_OUTBOX_SEND_TIMEOUT", "4s");
+        environment.putAll(extraEnvironment);
 
         orderProcess.startCommand(List.of(
                         Path.of(System.getProperty("java.home"), "bin", "java").toString(),
                         "-cp", classpath, "com.mercury.order.OrderServiceApplication"),
                 environment);
+    }
+
+    String kafkaBootstrapServers() {
+        return kafka.bootstrapServers();
+    }
+
+    /** Kafka stops answering (connections hang) but keeps its address and its data. */
+    void pauseKafka() {
+        kafka.getDockerClient().pauseContainerCmd(kafka.getContainerId()).exec();
+    }
+
+    void unpauseKafka() {
+        kafka.getDockerClient().unpauseContainerCmd(kafka.getContainerId()).exec();
+    }
+
+    /** safety net so a failed test cannot leave Kafka frozen for the next one */
+    void unpauseKafkaIfPaused() {
+        try {
+            if (Boolean.TRUE.equals(kafka.getDockerClient().inspectContainerCmd(kafka.getContainerId())
+                    .exec().getState().getPaused())) {
+                unpauseKafka();
+            }
+        } catch (RuntimeException ignored) {
+            // container gone or not started: nothing to unpause
+        }
+    }
+
+    String notificationBaseUrl() {
+        return notification.baseUrl();
     }
 
     void killOrderProcess() {
@@ -310,23 +360,60 @@ final class RealServicesStack {
             createDatabase(PRODUCT_DB);
             createDatabase(INVENTORY_DB);
             createDatabase(ORDER_PROCESS_DB);
+            createDatabase(NOTIFICATION_DB);
+
+            kafka.start();
+            createTopics();
 
             inventory.build();
             product.build();
+            notification.build();
 
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 inventory.stop();
                 product.stop();
                 orderProcess.stop();
+                notification.stop();
             }));
 
             inventory.start(jdbcUrl(INVENTORY_DB), "INVENTORY_DB_URL");
             product.start(jdbcUrl(PRODUCT_DB), "PRODUCT_DB_URL");
+            notification.startCommand(List.of(
+                            Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                            "-jar", notification.jar().toString()),
+                    java.util.Map.of(
+                            "NOTIFICATION_DB_URL", jdbcUrl(NOTIFICATION_DB),
+                            "KAFKA_BOOTSTRAP_SERVERS", kafka.bootstrapServers(),
+                            "NOTIFICATION_RETRY_INITIAL_INTERVAL", "200ms",
+                            "NOTIFICATION_RETRY_MAX_INTERVAL", "1s"));
         } catch (Exception e) {
             inventory.stop();
             product.stop();
+            notification.stop();
             throw new IllegalStateException(
                     "Could not start the real Order/Product/Inventory stack: " + e.getMessage(), e);
+        }
+    }
+
+    /** created before anything publishes or consumes, so no component races the broker for them */
+    private void createTopics() throws Exception {
+        try (org.apache.kafka.clients.admin.Admin admin = org.apache.kafka.clients.admin.Admin.create(
+                java.util.Map.of("bootstrap.servers", kafka.bootstrapServers()))) {
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60);
+            while (true) {
+                try {
+                    admin.createTopics(List.of(
+                            new org.apache.kafka.clients.admin.NewTopic(EVENTS_TOPIC, 3, (short) 1),
+                            new org.apache.kafka.clients.admin.NewTopic(DLQ_TOPIC, 1, (short) 1)))
+                            .all().get(10, TimeUnit.SECONDS);
+                    return;
+                } catch (Exception e) {
+                    if (System.nanoTime() > deadline) {
+                        throw e;
+                    }
+                    Thread.sleep(500);
+                }
+            }
         }
     }
 

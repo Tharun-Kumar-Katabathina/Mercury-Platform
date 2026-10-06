@@ -1,6 +1,6 @@
 # Local development: Product and Inventory services
 
-> The Order Service (port 8083) has its own section in [order-service.md](order-service.md#12-local-development).
+> The Order Service (port 8083) has its own section in [order-service.md](order-service.md#12-local-development). Kafka and the Notification Service (port 8084) are covered in [event-driven-architecture.md](event-driven-architecture.md#11-local-development): `docker compose up -d postgres kafka`, then create the `mercury_notification` database once.
 
 How to run the Product and Inventory services locally and how to run their tests.
 Requirements: Java 21, Docker. Maven is not needed; each service ships its own `./mvnw`.

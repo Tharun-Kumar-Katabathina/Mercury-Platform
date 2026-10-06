@@ -32,6 +32,10 @@ public class OrderSaga {
     @Column(length = 1000)
     private String lastError;
 
+    /** why this saga was cancelled; set once, when compensation begins */
+    @Column(length = 100)
+    private String failureReason;
+
     @Version
     @Column(nullable = false)
     private Long version;
@@ -64,10 +68,13 @@ public class OrderSaga {
         this.lockedUntil = until;
     }
 
-    /** Idempotent: an already-compensating saga stays as it is. */
-    public void beginCompensation() {
+    /** Idempotent: an already-compensating saga stays as it is; the first reason given is kept. */
+    public void beginCompensation(String reason) {
         if (state == SagaState.RESERVING) {
             state = SagaState.COMPENSATING;
+        }
+        if (failureReason == null) {
+            failureReason = reason;
         }
     }
 
@@ -133,6 +140,10 @@ public class OrderSaga {
 
     public Instant getLockedUntil() {
         return lockedUntil;
+    }
+
+    public String getFailureReason() {
+        return failureReason;
     }
 
     public String getLastError() {

@@ -166,6 +166,38 @@ final class StackClient {
         return scalar(orderDb, "SELECT count(*) FROM order_idempotency_records WHERE order_id = ?", orderId);
     }
 
+    /** notification types recorded by the Notification Service for an order, oldest first */
+    java.util.List<String> notificationTypes(UUID orderId) throws SQLException {
+        java.util.List<String> types = new java.util.ArrayList<>();
+        try (Connection c = stack.open(RealServicesStack.NOTIFICATION_DB);
+             PreparedStatement s = c.prepareStatement(
+                     "SELECT type, detail FROM notification WHERE order_id = ? ORDER BY created_at")) {
+            s.setObject(1, orderId);
+            try (ResultSet rs = s.executeQuery()) {
+                while (rs.next()) {
+                    types.add(rs.getString(1) + (rs.getString(2) == null ? "" : ":" + rs.getString(2)));
+                }
+            }
+        }
+        return types;
+    }
+
+    void deleteNotification(UUID orderId) throws SQLException {
+        update(RealServicesStack.NOTIFICATION_DB, "DELETE FROM notification WHERE order_id = ?", orderId);
+    }
+
+    int notificationRows(UUID orderId) throws SQLException {
+        return scalar(RealServicesStack.NOTIFICATION_DB, "SELECT count(*) FROM notification WHERE order_id = ?", orderId);
+    }
+
+    int outboxUnpublished(String orderDb, UUID orderId) throws SQLException {
+        return scalar(orderDb, "SELECT count(*) FROM order_outbox WHERE aggregate_id = ? AND published_at IS NULL", orderId);
+    }
+
+    int outboxTotal(String orderDb, UUID orderId) throws SQLException {
+        return scalar(orderDb, "SELECT count(*) FROM order_outbox WHERE aggregate_id = ?", orderId);
+    }
+
     /** as if the saga's backoff and lease had elapsed: recovery may take it now */
     void makeDue(String orderDb, UUID orderId) throws SQLException {
         try (Connection c = stack.open(orderDb);
@@ -179,6 +211,10 @@ final class StackClient {
 
     void cleanUp(String orderDb, UUID... products) throws SQLException {
         for (UUID product : products) {
+            for (UUID orderId : orderIdsFor(orderDb, product)) {
+                update(orderDb, "DELETE FROM order_outbox WHERE aggregate_id = ?", orderId);
+                update(RealServicesStack.NOTIFICATION_DB, "DELETE FROM notification WHERE order_id = ?", orderId);
+            }
             for (String sql : new String[]{
                     "DELETE FROM order_idempotency_records WHERE order_id IN (SELECT order_id FROM order_items WHERE product_id = ?)",
                     "DELETE FROM order_saga WHERE order_id IN (SELECT order_id FROM order_items WHERE product_id = ?)",

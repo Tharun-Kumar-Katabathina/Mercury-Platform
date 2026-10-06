@@ -72,7 +72,7 @@ public class SagaRecovery {
         log.info("recovery orderId={} state={} attempt={}",
                 orderId, saga.get().state(), saga.get().attemptCount() + 1);
 
-        boolean finished = sagaService.compensate(orderId);
+        boolean finished = sagaService.compensate(orderId, "RECOVERED_AFTER_INTERRUPTION");
         if (finished) {
             metrics.recoverySucceeded();
             log.info("recovery orderId={} result=CANCELLED", orderId);

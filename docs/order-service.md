@@ -3,7 +3,8 @@
 Creates orders across Product Service and Inventory Service, keeps them consistent without a
 distributed transaction, is idempotent, and recovers from lost responses, failed compensations and crashes.
 Everything below describes what is implemented. Failure recovery has its own document:
-**[Saga reliability and recovery](saga-recovery.md)**.
+**[Saga reliability and recovery](saga-recovery.md)**. Order events and the outbox are described in
+**[Event-driven architecture](event-driven-architecture.md)**.
 
 ## 1. Architecture
 
@@ -78,10 +79,12 @@ Flyway migrations in `src/main/resources/db/migration`; Hibernate runs with `ddl
 | `orders` | id (UUID), status, total_amount, created_at, updated_at | status in (`PENDING`,`CONFIRMED`,`CANCELLED`); `total_amount >= 0` |
 | `order_items` | one row per product in an order | FK to `orders`; `quantity > 0`; `unit_price >= 0`; unique (`order_id`,`product_id`); index on `order_id`; `reservation_status` (V3) |
 | `order_idempotency_records` | one row per client Idempotency-Key (V2) | unique `idempotency_key`; FK to `orders`; status `IN_PROGRESS`/`COMPLETED` |
-| `order_saga` | durable saga progress, one row per order (V3) | PK/FK `order_id`; state in (`RESERVING`,`COMPENSATING`,`CONFIRMED`,`CANCELLED`,`RECOVERY_FAILED`); `attempt_count >= 0`; index on (`state`,`next_attempt_at`) |
+| `order_outbox` | events waiting to be, or already, published to Kafka (V4) | `seq` identity; unique `event_id`; event type in (`OrderCreated`,`OrderConfirmed`,`OrderCancelled`); index on (`published_at`,`next_attempt_at`) |
+| `order_saga` | durable saga progress, one row per order (V3, `failure_reason` added in V4) | PK/FK `order_id`; state in (`RESERVING`,`COMPENSATING`,`CONFIRMED`,`CANCELLED`,`RECOVERY_FAILED`); `attempt_count >= 0`; index on (`state`,`next_attempt_at`) |
 
 Migrations: `V1__initial_order_schema.sql`, `V2__add_order_idempotency_records.sql`,
-`V3__add_durable_saga.sql` (per-item reservation status and `order_saga`, backfilled for existing orders).
+`V3__add_durable_saga.sql` (per-item reservation status and `order_saga`, backfilled for existing orders),
+`V4__add_outbox.sql` (`order_outbox` and the saga's `failure_reason`).
 
 **Items are a snapshot.** `product_name`, `sku` and `unit_price` are copied from Product Service when
 the order is placed and never re-read. If the product's price changes later, the order keeps the old
@@ -216,6 +219,12 @@ the code is `PRODUCT_REQUEST_REJECTED` / `INVENTORY_REQUEST_REJECTED`.
   [saga-recovery.md](saga-recovery.md#7-observability).
 - Logs carry the order id, product id, operation, result, duration and a short SHA-256 fingerprint of the
   Idempotency-Key; the raw key is never logged.
+- **Events (Phase 9).** `OrderCreated`, `OrderConfirmed` and `OrderCancelled` are written to `order_outbox` in the
+  same transaction as the order change (`createPending`, `confirm`, `cancel`) and published to Kafka by a
+  separate publisher; `OrderCancelled` carries a reason (`INSUFFICIENT_STOCK`, `INVENTORY_UNAVAILABLE`, …).
+  Orders do not depend on Kafka: with Kafka down, orders still succeed and events wait in the outbox. Metrics
+  `events.published`, `events.publish.failed`, `outbox.pending`; read-only `/actuator/outbox`. See
+  [event-driven-architecture.md](event-driven-architecture.md).
 
 ## 11. Testing
 
@@ -231,12 +240,15 @@ the code is `PRODUCT_REQUEST_REJECTED` / `INVENTORY_REQUEST_REJECTED`.
 | `SagaRecoveryTests` | 12 | durable progress, ambiguous reservations, recovery, backoff, exclusivity |
 | `DownstreamGuardTests` | 8 | circuit breaker and bulkhead |
 | `SagaOperationsTests` | 4 | `/actuator/sagas` and metrics |
+| `OrderEventsTests` | 9 | events written atomically with state changes, contents, no idempotency key, replays and duplicates |
+| `OutboxPublisherTests`, `OutboxEndpointTests` | 11 | publisher behaviour under Kafka failure, ordering, crashes, racing publishers; `/actuator/outbox` |
 | `OrderServiceApplicationTests` | 1 | context loads |
 | **`OrderFlowIntegrationTests`** | 12 | **real** Order, Product, Inventory and PostgreSQL |
 | **`SagaRecoveryIntegrationTests`** | 7 | **real stack + fault proxy**: lost responses, failed compensation, exhausted retries, six workers, `kill -9` |
 | **`ResilienceIntegrationTests`** | 1 | **real stack**: Inventory outage, circuit opens, recovery after return |
+| **`EventFlowIntegrationTests`** | 7 | **real stack incl. Kafka and Notification**: order → outbox → Kafka → notification, Kafka outage, crash before publishing, duplicate and poison messages, 50 concurrent orders |
 
-Order Service: **113 tests**. (Product 27, Inventory 40.)
+Order Service: **140 tests**. (Product 27, Inventory 40, Notification 15.)
 
 The integration tests start a Testcontainers PostgreSQL (`postgres:16-alpine`), build Product and Inventory
 from `../product-service` and `../inventory-service` and run each as a separate process; Order Service runs in
@@ -269,10 +281,11 @@ Ports: Order `8083`, Product `8081`, Inventory `8082`, PostgreSQL `5432`.
 | `HTTP_CLIENT_CONNECT_TIMEOUT` / `HTTP_CLIENT_READ_TIMEOUT` | `2s` / `5s` |
 | `ORDER_IDEMPOTENCY_WAIT_TIMEOUT` | `5s` |
 | `ORDER_RECOVERY_*`, `ORDER_INVENTORY_*`, `ORDER_PRODUCT_*`, `MANAGEMENT_ENDPOINTS` | see [saga-recovery.md](saga-recovery.md#8-configuration) |
+| `KAFKA_BOOTSTRAP_SERVERS`, `ORDER_OUTBOX_*`, `KAFKA_PRODUCER_*` | `localhost:9092`, see [event-driven-architecture.md](event-driven-architecture.md#10-configuration) |
 
 ```bash
-docker compose up -d postgres
-docker exec mercury-postgres psql -U mercury -d mercury -c "CREATE DATABASE mercury_order"   # once (plus mercury_product / mercury_inventory)
+docker compose up -d postgres kafka
+docker exec mercury-postgres psql -U mercury -d mercury -c "CREATE DATABASE mercury_order"   # once (plus mercury_product / mercury_inventory / mercury_notification)
 
 # three terminals, from services/<name>:
 POSTGRES_PASSWORD=mercury ./mvnw spring-boot:run        # inventory-service, product-service, order-service
@@ -295,7 +308,7 @@ Tests (from `services/order-service`):
 ```bash
 ./mvnw clean test                                                    # everything (the integration tests need Docker)
 ./mvnw clean test -Dtest='!*IntegrationTests'                        # without Docker
-./mvnw clean test -Dtest='OrderFlowIntegrationTests,SagaRecoveryIntegrationTests,ResilienceIntegrationTests'   # only the real-stack tests (~100 s)
+./mvnw clean test -Dtest='OrderFlowIntegrationTests,SagaRecoveryIntegrationTests,ResilienceIntegrationTests,EventFlowIntegrationTests'   # only the real-stack tests (~3 min)
 ```
 
 ## 13. Known limitations

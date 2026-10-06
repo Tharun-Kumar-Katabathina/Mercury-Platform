@@ -61,7 +61,7 @@ public class OrderSagaService {
         } catch (RuntimeException e) {
             log.warn("saga orderId={} operation=RESERVE result=FAILED reason={}; compensating",
                     orderId, e.getMessage());
-            compensateOrScheduleRetry(orderId, e.getMessage());
+            compensateOrScheduleRetry(orderId, reasonFor(e), e.getMessage());
             throw e;
         }
 
@@ -125,7 +125,7 @@ public class OrderSagaService {
         }
 
         log.error("saga orderId={} could not be CONFIRMED; compensating", orderId, cause);
-        compensateOrScheduleRetry(orderId, "confirm failed: " + cause.getMessage());
+        compensateOrScheduleRetry(orderId, "CONFIRMATION_FAILED", "confirm failed: " + cause.getMessage());
         throw new OrderProcessingException(
                 "Order could not be completed; reserved stock was released", cause);
     }
@@ -133,16 +133,16 @@ public class OrderSagaService {
     // ---- compensation (shared by the request path and recovery) -----------------------------
 
     /** One compensation pass now; if it cannot finish, schedule a durable retry. */
-    private void compensateOrScheduleRetry(UUID orderId, String reason) {
+    private void compensateOrScheduleRetry(UUID orderId, String reasonCode, String detail) {
         boolean finished;
         try {
-            finished = compensate(orderId);
+            finished = compensate(orderId, reasonCode);
         } catch (RuntimeException e) {
             log.error("saga orderId={} compensation pass crashed", orderId, e);
             finished = false;
         }
         if (!finished) {
-            OrderTransactions.SagaStateView view = transactions.scheduleRetry(orderId, reason);
+            OrderTransactions.SagaStateView view = transactions.scheduleRetry(orderId, detail);
             log.warn("saga orderId={} state={} attempt={} nextAttemptAt={} (compensation incomplete)",
                     orderId, view.state(), view.attemptCount(), view.nextAttemptAt());
         }
@@ -156,9 +156,9 @@ public class OrderSagaService {
      *
      * @return true when the order is now CANCELLED, false when something is still outstanding
      */
-    public boolean compensate(UUID orderId) {
+    public boolean compensate(UUID orderId, String reasonCode) {
 
-        transactions.beginCompensation(orderId);
+        transactions.beginCompensation(orderId, reasonCode);
 
         List<ItemProgress> items = new ArrayList<>(transactions.findItems(orderId));
         Collections.reverse(items);   // newest reservation first
@@ -222,6 +222,21 @@ public class OrderSagaService {
         }
 
         return true;   // NOT_STARTED, NOT_RESERVED, RELEASED: nothing held
+    }
+
+    /** A short, stable code for why an order is being cancelled; carried by the OrderCancelled event. */
+    static String reasonFor(RuntimeException e) {
+        if (e instanceof InventoryServiceException ise) {
+            String body = ise.getResponseBody() == null ? "" : ise.getResponseBody();
+            if (body.contains("INSUFFICIENT_STOCK")) {
+                return "INSUFFICIENT_STOCK";
+            }
+            if (body.contains("INVENTORY_NOT_FOUND")) {
+                return "INVENTORY_NOT_FOUND";
+            }
+            return ise.getStatus().is4xxClientError() ? "RESERVATION_REJECTED" : "INVENTORY_UNAVAILABLE";
+        }
+        return "ORDER_PROCESSING_FAILED";
     }
 
     /**
