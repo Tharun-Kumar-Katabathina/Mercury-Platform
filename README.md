@@ -11,3 +11,9 @@ Microservices e-commerce platform.
 - `load-tests/` – performance tests
 - `docs/` – documentation
 - `scripts/` – helper scripts
+
+## Documentation
+
+- [Architecture](docs/architecture.md): services, ports, ownership
+- [Product to Inventory reservation flow](docs/product-inventory-flow.md): API, idempotency, errors, concurrency
+- [Local development](docs/local-development.md): run the services, run the tests
