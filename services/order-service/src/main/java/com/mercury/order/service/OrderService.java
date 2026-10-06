@@ -1,5 +1,6 @@
 package com.mercury.order.service;
 
+import com.mercury.order.config.ReservationProperties;
 import com.mercury.order.dto.CreateOrderItemRequest;
 import com.mercury.order.dto.CreateOrderRequest;
 import com.mercury.order.dto.OrderResponse;
@@ -11,6 +12,7 @@ import com.mercury.order.exception.OrderNotFoundException;
 import com.mercury.order.exception.OrderProcessingException;
 import com.mercury.order.model.ClaimStatus;
 import com.mercury.order.model.OrderStatus;
+import com.mercury.order.model.ReservationMode;
 import com.mercury.order.repository.OrderRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,18 +58,21 @@ public class OrderService {
     private final OrderTransactions transactions;
     private final OrderSagaService sagaService;
     private final Duration idempotencyWaitTimeout;
+    private final ReservationProperties reservation;
 
     public OrderService(
             OrderRepository orderRepository,
             OrderPlanner planner,
             OrderTransactions transactions,
             OrderSagaService sagaService,
-            @Value("${order.idempotency.wait-timeout:5s}") Duration idempotencyWaitTimeout) {
+            @Value("${order.idempotency.wait-timeout:5s}") Duration idempotencyWaitTimeout,
+            ReservationProperties reservation) {
         this.orderRepository = orderRepository;
         this.planner = planner;
         this.transactions = transactions;
         this.sagaService = sagaService;
         this.idempotencyWaitTimeout = idempotencyWaitTimeout;
+        this.reservation = reservation;
     }
 
     @Transactional(readOnly = true)
@@ -102,9 +107,14 @@ public class OrderService {
             // read-only: nothing is saved or reserved until every product is known to be valid
             OrderDraft draft = planner.draft(items);
 
+            boolean async = reservation.mode() == ReservationMode.ASYNC;
+
             UUID orderId;
             try {
-                orderId = transactions.createPending(idempotencyKey, requestHash, draft);
+                orderId = async
+                        ? transactions.createPendingAsync(
+                                idempotencyKey, requestHash, draft, reservation.asyncDeadline())
+                        : transactions.createPending(idempotencyKey, requestHash, draft);
             } catch (DataIntegrityViolationException e) {
                 if (transactions.findClaim(idempotencyKey).isPresent()) {
                     continue;   // another request claimed the key first; resolve it next round
@@ -112,6 +122,12 @@ public class OrderService {
                 throw e;
             }
 
+            if (async) {
+                // nothing more to do on the request path: Inventory's reply (or the recovery deadline) finishes it
+                sagaService.orderAccepted(orderId, draft);
+                return new OrderCreationResult(
+                        transactions.readOrder(orderId), false, OrderCreationResult.Kind.ACCEPTED);
+            }
             return sagaService.execute(orderId, idempotencyKey, draft);
         }
 
@@ -138,9 +154,20 @@ public class OrderService {
             if (requestHash != null && !claim.get().requestHash().equals(requestHash)) {
                 throw new IdempotencyKeyMismatchException();
             }
+            boolean async = transactions.modeOf(claim.get().orderId())
+                    .map(mode -> mode == ReservationMode.ASYNC).orElse(false);
+
             if (claim.get().status() == ClaimStatus.COMPLETED) {
                 return Optional.of(new OrderCreationResult(
-                        transactions.readSnapshot(claim.get().snapshot()), true));
+                        transactions.readSnapshot(claim.get().snapshot()), true,
+                        async ? OrderCreationResult.Kind.OK : OrderCreationResult.Kind.CREATED));
+            }
+            if (async) {
+                // an ASYNC order can legitimately wait for a long time: answer with where it is now, never block
+                var order = transactions.readOrder(claim.get().orderId());
+                return Optional.of(new OrderCreationResult(order, true,
+                        order.status() == OrderStatus.PENDING
+                                ? OrderCreationResult.Kind.ACCEPTED : OrderCreationResult.Kind.OK));
             }
             if (System.nanoTime() >= deadline) {
                 throw new OrderConflictException(

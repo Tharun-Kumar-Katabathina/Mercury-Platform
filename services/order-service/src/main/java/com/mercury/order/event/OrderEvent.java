@@ -8,7 +8,8 @@ import java.util.UUID;
  * secrets or the client's Idempotency-Key. {@code eventId} is what consumers use to ignore a
  * redelivered event.
  */
-public sealed interface OrderEvent permits OrderCreatedEvent, OrderConfirmedEvent, OrderCancelledEvent {
+public sealed interface OrderEvent permits OrderCreatedEvent, OrderConfirmedEvent, OrderCancelledEvent,
+        InventoryReservationRequestedEvent {
 
     UUID eventId();
 

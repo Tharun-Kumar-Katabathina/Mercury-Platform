@@ -25,7 +25,7 @@ import java.util.Map;
 public class SagasEndpoint {
 
     private static final List<SagaState> UNFINISHED =
-            List.of(SagaState.RESERVING, SagaState.COMPENSATING, SagaState.RECOVERY_FAILED);
+            List.of(SagaState.RESERVING, SagaState.AWAITING_INVENTORY, SagaState.COMPENSATING, SagaState.RECOVERY_FAILED);
 
     private final OrderSagaRepository sagas;
     private final Clock clock;
@@ -60,7 +60,7 @@ public class SagasEndpoint {
         Map<String, Object> overview = new LinkedHashMap<>();
         overview.put("countsByState", counts);
         overview.put("dueForRecovery", sagas.countDue(
-                List.of(SagaState.RESERVING, SagaState.COMPENSATING), now));
+                List.of(SagaState.RESERVING, SagaState.AWAITING_INVENTORY, SagaState.COMPENSATING), now));
         overview.put("oldestUnfinishedAgeSeconds", unfinished.stream()
                 .mapToLong(saga -> Duration.between(saga.getCreatedAt(), now).toSeconds())
                 .max().orElse(0));

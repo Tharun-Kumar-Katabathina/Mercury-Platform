@@ -63,16 +63,23 @@ public class SagaRecovery {
         }
 
         Optional<OrderStatus> status = transactions.statusOf(orderId);
-        if (status.isPresent() && status.get() != OrderStatus.PENDING) {
+        boolean lateReservationRelease = status.isPresent() && status.get() == OrderStatus.CANCELLED
+                && saga.get().state() == SagaState.COMPENSATING;   // Inventory reserved after the order was cancelled
+        if (status.isPresent() && status.get() != OrderStatus.PENDING && !lateReservationRelease) {
             log.warn("recovery orderId={} order is already {} but its saga is {}; nothing to undo",
                     orderId, status.get(), saga.get().state());
             return false;
         }
 
+        if (saga.get().state() == SagaState.AWAITING_INVENTORY) {
+            return recoverAwaiting(orderId, saga.get());
+        }
+
         log.info("recovery orderId={} state={} attempt={}",
                 orderId, saga.get().state(), saga.get().attemptCount() + 1);
 
-        boolean finished = sagaService.compensate(orderId, "RECOVERED_AFTER_INTERRUPTION");
+        boolean finished = sagaService.compensate(orderId,
+                lateReservationRelease ? "LATE_RESERVATION_RELEASED" : "RECOVERED_AFTER_INTERRUPTION");
         if (finished) {
             metrics.recoverySucceeded();
             log.info("recovery orderId={} result=CANCELLED", orderId);
@@ -81,6 +88,33 @@ public class SagaRecovery {
 
         OrderTransactions.SagaStateView after = transactions.scheduleRetry(
                 orderId, "recovery attempt " + (saga.get().attemptCount() + 1) + " did not finish");
+        metrics.recoveryAttemptFailed();
+        if (after.state() == SagaState.RECOVERY_FAILED) {
+            log.error("recovery orderId={} gave up after {} attempts; needs a person",
+                    orderId, after.attemptCount());
+        } else {
+            log.warn("recovery orderId={} attempt={} failed; next attempt at {}",
+                    orderId, after.attemptCount(), after.nextAttemptAt());
+        }
+        return false;
+    }
+
+    /**
+     * An ASYNC order whose waiting deadline passed with no reply: ask Inventory what it decided and
+     * finish the order. Inventory unreachable: retry later with backoff, bounded like every other recovery.
+     */
+    private boolean recoverAwaiting(UUID orderId, OrderTransactions.SagaStateView saga) {
+
+        log.info("recovery orderId={} state=AWAITING_INVENTORY deadline passed; asking Inventory", orderId);
+
+        if (sagaService.resolveAwaiting(orderId)) {
+            metrics.recoverySucceeded();
+            log.info("recovery orderId={} resolved by lookup", orderId);
+            return true;
+        }
+
+        OrderTransactions.SagaStateView after = transactions.scheduleAwaitRetry(
+                orderId, "Inventory could not be asked, attempt " + (saga.attemptCount() + 1));
         metrics.recoveryAttemptFailed();
         if (after.state() == SagaState.RECOVERY_FAILED) {
             log.error("recovery orderId={} gave up after {} attempts; needs a person",

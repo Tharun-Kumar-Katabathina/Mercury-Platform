@@ -4,7 +4,13 @@ import com.mercury.order.config.RecoveryProperties;
 import com.mercury.order.dto.OrderResponse;
 import com.mercury.order.event.OrderCancelledEvent;
 import com.mercury.order.event.OrderConfirmedEvent;
+import com.mercury.order.event.InventoryReservationRequestedEvent;
 import com.mercury.order.event.OrderCreatedEvent;
+import com.mercury.order.exception.StockStillHeldException;
+import com.mercury.order.inbound.ProcessedInboundEvent;
+import com.mercury.order.inbound.ProcessedInboundEventRepository;
+import com.mercury.order.model.ReservationMode;
+import com.mercury.order.model.SagaState;
 import com.mercury.order.outbox.OutboxWriter;
 import com.mercury.order.model.ClaimStatus;
 import com.mercury.order.model.Order;
@@ -50,6 +56,7 @@ public class OrderTransactions {
     private final RecoveryProperties recovery;
     private final Clock clock;
     private final OutboxWriter outbox;
+    private final ProcessedInboundEventRepository processedEvents;
 
     public OrderTransactions(
             OrderRepository orderRepository,
@@ -59,7 +66,8 @@ public class OrderTransactions {
             JsonMapper jsonMapper,
             RecoveryProperties recovery,
             Clock clock,
-            OutboxWriter outbox) {
+            OutboxWriter outbox,
+            ProcessedInboundEventRepository processedEvents) {
         this.orderRepository = orderRepository;
         this.itemRepository = itemRepository;
         this.claimRepository = claimRepository;
@@ -68,6 +76,7 @@ public class OrderTransactions {
         this.recovery = recovery;
         this.clock = clock;
         this.outbox = outbox;
+        this.processedEvents = processedEvents;
     }
 
     private Instant now() {
@@ -112,14 +121,18 @@ public class OrderTransactions {
     @Transactional
     public OrderResponse confirm(UUID orderId, String idempotencyKey) {
 
+        OrderIdempotencyRecord claim = claimRepository.findByIdempotencyKey(idempotencyKey).orElseThrow();
+        return confirmOrder(orderId, claim);
+    }
+
+    private OrderResponse confirmOrder(UUID orderId, OrderIdempotencyRecord claim) {
+
         Order order = orderRepository.findWithItemsById(orderId).orElseThrow();
         order.confirm();
         order = orderRepository.saveAndFlush(order);   // flush so updatedAt is final
 
         OrderResponse response = OrderResponse.from(order);
 
-        OrderIdempotencyRecord claim = claimRepository.findByIdempotencyKey(idempotencyKey)
-                .orElseThrow();
         claim.complete(jsonMapper.writeValueAsString(response));
         claimRepository.saveAndFlush(claim);
 
@@ -133,17 +146,47 @@ public class OrderTransactions {
     }
 
     /**
-     * PENDING -> CANCELLED, saga CANCELLED, and the key is freed so the client can retry the same
-     * request and have it evaluated afresh (failures are never replayed).
+     * PENDING -> CANCELLED and saga CANCELLED. SYNC: the key is freed so the client can retry the same
+     * request and have it evaluated afresh (failures are never replayed). ASYNC: the client already holds an
+     * order id, so the claim is completed with the CANCELLED order and a replay returns it.
+     *
+     * Refuses while any item may still be held at Inventory (StockStillHeldException), and is a no-op for
+     * an order that is already CANCELLED (the late-reservation release path finishing its work).
      */
     @Transactional
     public void cancel(UUID orderId) {
+        cancelOrder(orderId);
+    }
+
+    private void cancelOrder(UUID orderId) {
 
         Order order = orderRepository.findById(orderId).orElseThrow();
+
+        if (itemRepository.countHeld(orderId) > 0) {
+            throw new StockStillHeldException(orderId);
+        }
+
+        if (order.getStatus() == OrderStatus.CANCELLED) {
+            OrderSaga saga = sagaRepository.findById(orderId).orElseThrow();
+            if (saga.getState() != SagaState.CANCELLED) {
+                saga.cancelled();
+                sagaRepository.saveAndFlush(saga);
+            }
+            return;   // already cancelled and announced: nothing more to do, and no second event
+        }
+
         order.cancel();
         orderRepository.saveAndFlush(order);
 
-        claimRepository.deleteByOrderId(orderId);
+        if (order.getReservationMode() == ReservationMode.ASYNC) {
+            OrderResponse cancelled = OrderResponse.from(
+                    orderRepository.findWithItemsById(orderId).orElseThrow());
+            OrderIdempotencyRecord claim = claimRepository.findByOrderId(orderId).orElseThrow();
+            claim.complete(jsonMapper.writeValueAsString(cancelled));
+            claimRepository.saveAndFlush(claim);
+        } else {
+            claimRepository.deleteByOrderId(orderId);
+        }
 
         OrderSaga saga = sagaRepository.findById(orderId).orElseThrow();
         String reason = saga.getFailureReason() == null ? "UNKNOWN" : saga.getFailureReason();
@@ -151,6 +194,167 @@ public class OrderTransactions {
         sagaRepository.saveAndFlush(saga);
 
         outbox.append(OrderCancelledEvent.of(orderId, now(), reason));
+    }
+
+    // ---- ASYNC reservation (Phase 10) --------------------------------------------------------
+
+    /**
+     * ASYNC sibling of createPending: ONE transaction saves the PENDING order (mode ASYNC), claims the
+     * Idempotency-Key, starts the saga as AWAITING_INVENTORY with the waiting deadline, and writes both
+     * OrderCreated (a fact for other consumers) and InventoryReservationRequested (the command for
+     * Inventory) to the outbox. Either everything exists or nothing does.
+     */
+    @Transactional
+    public UUID createPendingAsync(
+            String idempotencyKey, String requestHash, OrderDraft draft, java.time.Duration deadline) {
+
+        Order order = Order.pending(draft.totalAmount(), ReservationMode.ASYNC);
+        for (OrderDraft.Item item : draft.items()) {
+            order.addItem(new OrderItem(
+                    item.productId(), item.productName(), item.sku(),
+                    item.unitPrice(), item.quantity()));
+        }
+        order = orderRepository.saveAndFlush(order);
+
+        claimRepository.saveAndFlush(
+                OrderIdempotencyRecord.claim(idempotencyKey, requestHash, order.getId()));
+        sagaRepository.saveAndFlush(OrderSaga.awaitingInventory(order.getId(), now().plus(deadline)));
+
+        outbox.append(OrderCreatedEvent.of(order.getId(), now(),
+                draft.items().stream()
+                        .map(i -> new OrderCreatedEvent.Item(
+                                i.productId(), i.quantity(), i.productName(), i.sku(), i.unitPrice()))
+                        .toList(),
+                draft.totalAmount()));
+        outbox.append(InventoryReservationRequestedEvent.of(order.getId(), now(),
+                draft.items().stream()
+                        .map(i -> new InventoryReservationRequestedEvent.Item(i.productId(), i.quantity()))
+                        .toList()));
+
+        return order.getId();
+    }
+
+    /**
+     * InventoryReserved arrived. Pending and waiting: reserve all items and CONFIRM. Anything else: the
+     * stock Inventory holds must go back. A confirmed order is left alone, because that stock is its own.
+     * The "event handled" marker is in the same transaction, so a crash cannot lose or repeat the effect.
+     */
+    @Transactional
+    public InboundResult applyInventoryReserved(UUID eventId, UUID orderId) {
+
+        if (processedEvents.existsById(eventId)) {
+            return InboundResult.DUPLICATE;
+        }
+        processedEvents.saveAndFlush(new ProcessedInboundEvent(eventId, "inventory-event", now()));
+
+        Optional<Order> found = orderRepository.findById(orderId);
+        if (found.isEmpty() || found.get().getReservationMode() != ReservationMode.ASYNC) {
+            return InboundResult.IGNORED;
+        }
+        Order order = found.get();
+        if (order.getStatus() == OrderStatus.CONFIRMED) {
+            return InboundResult.IGNORED;
+        }
+        SagaState sagaState = sagaRepository.findById(orderId).orElseThrow().getState();
+
+        itemRepository.updateAllStatus(orderId, ReservationStatus.RESERVED);   // from here these items are held
+
+        if (order.getStatus() == OrderStatus.PENDING && sagaState == SagaState.AWAITING_INVENTORY) {
+            confirmOrder(orderId, claimRepository.findByOrderId(orderId).orElseThrow());
+            return InboundResult.CONFIRMED;
+        }
+
+        // finished or being cancelled: reopen the saga so the durable compensation gives the stock back
+        OrderSaga saga = sagaRepository.findById(orderId).orElseThrow();
+        saga.reopenForRelease(now());
+        sagaRepository.saveAndFlush(saga);
+        return InboundResult.RELEASE_NEEDED;
+    }
+
+    /** InventoryRejected arrived: nothing is reserved. A pending, waiting order is CANCELLED with the reason. */
+    @Transactional
+    public InboundResult applyInventoryRejected(UUID eventId, UUID orderId, String reason) {
+
+        if (processedEvents.existsById(eventId)) {
+            return InboundResult.DUPLICATE;
+        }
+        processedEvents.saveAndFlush(new ProcessedInboundEvent(eventId, "inventory-event", now()));
+
+        Optional<Order> found = orderRepository.findById(orderId);
+        if (found.isEmpty() || found.get().getReservationMode() != ReservationMode.ASYNC
+                || found.get().getStatus() != OrderStatus.PENDING) {
+            return InboundResult.IGNORED;
+        }
+        if (sagaRepository.findById(orderId).orElseThrow().getState() != SagaState.AWAITING_INVENTORY) {
+            return InboundResult.IGNORED;   // already being cancelled by recovery
+        }
+
+        cancelAwaitingOrder(orderId, reason == null || reason.isBlank() ? "RESERVATION_REJECTED" : reason);
+        return InboundResult.CANCELLED;
+    }
+
+    /**
+     * The waiting deadline passed and Inventory says it reserved the order: continue to confirmation.
+     * @return false if the order is no longer pending and waiting (a reply got there first)
+     */
+    @Transactional
+    public boolean confirmAwaiting(UUID orderId) {
+        Order order = orderRepository.findById(orderId).orElseThrow();
+        if (order.getStatus() != OrderStatus.PENDING
+                || sagaRepository.findById(orderId).orElseThrow().getState() != SagaState.AWAITING_INVENTORY) {
+            return false;
+        }
+        itemRepository.updateAllStatus(orderId, ReservationStatus.RESERVED);
+        confirmOrder(orderId, claimRepository.findByOrderId(orderId).orElseThrow());
+        return true;
+    }
+
+    /**
+     * Inventory rejected the order, or holds nothing for it after the deadline: cancel with {@code reason}.
+     * If a reservation shows up later, the late-reply path releases it.
+     * @return false if the order is no longer pending and waiting
+     */
+    @Transactional
+    public boolean cancelAwaiting(UUID orderId, String reason) {
+        Order order = orderRepository.findById(orderId).orElseThrow();
+        if (order.getStatus() != OrderStatus.PENDING
+                || sagaRepository.findById(orderId).orElseThrow().getState() != SagaState.AWAITING_INVENTORY) {
+            return false;
+        }
+        cancelAwaitingOrder(orderId, reason);
+        return true;
+    }
+
+    private void cancelAwaitingOrder(UUID orderId, String reason) {
+        itemRepository.updateAllStatus(orderId, ReservationStatus.NOT_RESERVED);
+        OrderSaga saga = sagaRepository.findById(orderId).orElseThrow();
+        saga.beginCompensation(reason);
+        sagaRepository.saveAndFlush(saga);
+        cancelOrder(orderId);
+    }
+
+    /** The reply is overdue and Inventory could not be asked: retry later with backoff, bounded, then RECOVERY_FAILED. */
+    @Transactional
+    public SagaStateView scheduleAwaitRetry(UUID orderId, String error) {
+        OrderSaga saga = sagaRepository.findById(orderId).orElseThrow();
+        int failedAttempts = saga.getAttemptCount() + 1;
+        if (failedAttempts >= recovery.maxAttempts()) {
+            saga.recoveryFailed(error);
+        } else {
+            saga.awaitRetryAt(now().plus(recovery.backoffAfter(failedAttempts)), error);
+        }
+        saga = sagaRepository.saveAndFlush(saga);
+        return new SagaStateView(saga.getState(), saga.getAttemptCount(), saga.getNextAttemptAt());
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<ReservationMode> modeOf(UUID orderId) {
+        return orderRepository.findModeById(orderId);
+    }
+
+    @Transactional(readOnly = true)
+    public OrderResponse readOrder(UUID orderId) {
+        return OrderResponse.from(orderRepository.findWithItemsById(orderId).orElseThrow());
     }
 
     // ---- durable saga progress -------------------------------------------------------------
@@ -206,7 +410,7 @@ public class OrderTransactions {
     @Transactional
     public List<UUID> claimDue() {
         List<OrderSaga> due = sagaRepository.lockDue(
-                List.of(com.mercury.order.model.SagaState.RESERVING, com.mercury.order.model.SagaState.COMPENSATING),
+                List.of(SagaState.RESERVING, SagaState.AWAITING_INVENTORY, SagaState.COMPENSATING),
                 now(),
                 org.springframework.data.domain.PageRequest.of(0, recovery.batchSize()));
         List<UUID> ids = new java.util.ArrayList<>();

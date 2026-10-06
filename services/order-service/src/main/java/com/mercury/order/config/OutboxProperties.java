@@ -24,7 +24,9 @@ public record OutboxProperties(
         @DefaultValue("1m") Duration maxBackoff,
         @DefaultValue("2.0") double backoffMultiplier,
         /** how long to wait for Kafka to acknowledge one event */
-        @DefaultValue("10s") Duration sendTimeout
+        @DefaultValue("10s") Duration sendTimeout,
+        /** topic for the InventoryReservationRequested command (ASYNC reservation) */
+        @DefaultValue("mercury.inventory.commands") String inventoryCommandsTopic
 ) {
 
     public Duration backoffAfter(int failedAttempts) {

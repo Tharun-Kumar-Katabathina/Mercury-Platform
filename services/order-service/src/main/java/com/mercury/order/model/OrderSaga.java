@@ -58,6 +58,34 @@ public class OrderSaga {
         return saga;
     }
 
+    /** ASYNC: nobody owns it; it waits for Inventory's reply and recovery looks at it after the deadline. */
+    public static OrderSaga awaitingInventory(UUID orderId, Instant deadline) {
+        OrderSaga saga = new OrderSaga();
+        saga.orderId = orderId;
+        saga.state = SagaState.AWAITING_INVENTORY;
+        saga.nextAttemptAt = deadline;
+        return saga;
+    }
+
+    /**
+     * A reservation turned up for an order that is already finished (or being cancelled): the stock must
+     * be given back. Reuses the durable compensation machinery, due immediately.
+     */
+    public void reopenForRelease(Instant now) {
+        state = SagaState.COMPENSATING;
+        attemptCount = 0;
+        nextAttemptAt = now;
+        lockedUntil = null;
+    }
+
+    /** The reply is overdue and Inventory could not be asked: try again later (state unchanged). */
+    public void awaitRetryAt(Instant next, String error) {
+        attemptCount++;
+        nextAttemptAt = next;
+        lockedUntil = null;
+        lastError = truncate(error);
+    }
+
     /** The owner is still alive: push out both the lease and the point where it counts as abandoned. */
     public void heartbeat(Instant lockedUntil, Instant nextAttemptAt) {
         this.lockedUntil = lockedUntil;
@@ -70,7 +98,7 @@ public class OrderSaga {
 
     /** Idempotent: an already-compensating saga stays as it is; the first reason given is kept. */
     public void beginCompensation(String reason) {
-        if (state == SagaState.RESERVING) {
+        if (state == SagaState.RESERVING || state == SagaState.AWAITING_INVENTORY) {
             state = SagaState.COMPENSATING;
         }
         if (failureReason == null) {

@@ -3,6 +3,8 @@ package com.mercury.order.model;
 public enum SagaState {
     /** the order is being created: reserving stock, then confirming */
     RESERVING,
+    /** ASYNC only: the command was sent; waiting for Inventory's reply until a deadline */
+    AWAITING_INVENTORY,
     /** the order did not complete; stock is being given back, then the order is cancelled */
     COMPENSATING,
     /** terminal: order confirmed */
@@ -13,6 +15,6 @@ public enum SagaState {
     RECOVERY_FAILED;
 
     public boolean isActive() {
-        return this == RESERVING || this == COMPENSATING;
+        return this == RESERVING || this == AWAITING_INVENTORY || this == COMPENSATING;
     }
 }

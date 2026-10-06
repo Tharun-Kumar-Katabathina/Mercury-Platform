@@ -15,11 +15,14 @@ public class OutboxTransactions {
 
     private final OutboxRepository outbox;
     private final OutboxProperties properties;
+    private final EventTopics topics;
     private final Clock clock;
 
-    public OutboxTransactions(OutboxRepository outbox, OutboxProperties properties, Clock clock) {
+    public OutboxTransactions(
+            OutboxRepository outbox, OutboxProperties properties, EventTopics topics, Clock clock) {
         this.outbox = outbox;
         this.properties = properties;
+        this.topics = topics;
         this.clock = clock;
     }
 
@@ -35,7 +38,7 @@ public class OutboxTransactions {
         outbox.saveAllAndFlush(due);
         return due.stream()
                 .map(e -> new OutboxMessage(e.getSeq(), e.getEventId(), e.getAggregateId(),
-                        e.getEventType(), properties.topic(), e.getPayload()))
+                        e.getEventType(), topics.topicFor(e.getEventType()), e.getPayload()))
                 .toList();
     }
 

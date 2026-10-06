@@ -477,6 +477,8 @@ class SagaRecoveryTests {
                 new OrderSagaService(transactions, inventoryClient,
                         new SagaMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
                                 sagaRepository, java.time.Clock.systemUTC())),
-                java.time.Duration.ofMillis(200));
+                java.time.Duration.ofMillis(200),
+                new com.mercury.order.config.ReservationProperties(
+                        com.mercury.order.model.ReservationMode.SYNC, java.time.Duration.ofSeconds(60)));
     }
 }

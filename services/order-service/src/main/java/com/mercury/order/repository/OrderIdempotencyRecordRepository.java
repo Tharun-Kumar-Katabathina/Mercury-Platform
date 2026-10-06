@@ -13,6 +13,8 @@ public interface OrderIdempotencyRecordRepository extends JpaRepository<OrderIde
 
     Optional<OrderIdempotencyRecord> findByIdempotencyKey(String idempotencyKey);
 
+    Optional<OrderIdempotencyRecord> findByOrderId(UUID orderId);
+
     /** Always reads the database; see {@link ClaimView}. */
     @Query("""
             select new com.mercury.order.model.ClaimView(

@@ -23,6 +23,11 @@ public class Order {
     @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal totalAmount;
 
+    /** fixed when the order is created: switching the configuration never changes an order in flight */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 10)
+    private ReservationMode reservationMode = ReservationMode.SYNC;
+
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<OrderItem> items = new ArrayList<>();
 
@@ -36,9 +41,14 @@ public class Order {
     }
 
     public static Order pending(BigDecimal totalAmount) {
+        return pending(totalAmount, ReservationMode.SYNC);
+    }
+
+    public static Order pending(BigDecimal totalAmount, ReservationMode mode) {
         Order order = new Order();
         order.status = OrderStatus.PENDING;
         order.totalAmount = totalAmount;
+        order.reservationMode = mode;
         return order;
     }
 
@@ -78,6 +88,10 @@ public class Order {
 
     public UUID getId() {
         return id;
+    }
+
+    public ReservationMode getReservationMode() {
+        return reservationMode;
     }
 
     public OrderStatus getStatus() {

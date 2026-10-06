@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.net.URI;
 import java.util.UUID;
 
 @RestController
@@ -22,8 +23,12 @@ public class OrderController {
     }
 
     /**
-     * 201 Created for a new order. A retry with the same Idempotency-Key and payload returns the
-     * original order, again 201, with {@code Idempotent-Replayed: true}.
+     * Synchronous flow: 201 Created for a new order; a retry with the same Idempotency-Key and payload
+     * returns the original order, again 201, with {@code Idempotent-Replayed: true}.
+     *
+     * Asynchronous flow: 202 Accepted + Location while Inventory has not answered yet (the same for a
+     * retry, which never waits); once the order is CONFIRMED or CANCELLED a retry returns it with 200
+     * and {@code Idempotent-Replayed: true}.
      */
     @PostMapping
     public ResponseEntity<OrderResponse> createOrder(
@@ -33,7 +38,14 @@ public class OrderController {
 
         OrderCreationResult result = orderService.createOrder(idempotencyKey, request);
 
-        ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(switch (result.kind()) {
+            case CREATED -> HttpStatus.CREATED;
+            case ACCEPTED -> HttpStatus.ACCEPTED;
+            case OK -> HttpStatus.OK;
+        });
+        if (result.kind() != OrderCreationResult.Kind.CREATED) {
+            response.location(URI.create("/api/v1/orders/" + result.order().id()));
+        }
         if (result.replayed()) {
             response.header("Idempotent-Replayed", "true");
         }

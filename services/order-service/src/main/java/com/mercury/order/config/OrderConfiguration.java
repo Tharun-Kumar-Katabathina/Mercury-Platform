@@ -11,7 +11,7 @@ import java.time.Clock;
 
 @Configuration
 @EnableScheduling
-@EnableConfigurationProperties({RecoveryProperties.class, ResilienceProperties.class, OutboxProperties.class})
+@EnableConfigurationProperties({RecoveryProperties.class, ResilienceProperties.class, OutboxProperties.class, ReservationProperties.class})
 public class OrderConfiguration {
 
     @Bean

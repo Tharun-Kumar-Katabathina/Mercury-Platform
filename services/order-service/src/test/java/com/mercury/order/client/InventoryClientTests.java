@@ -109,4 +109,40 @@ class InventoryClientTests {
                 .isInstanceOfSatisfying(InventoryServiceException.class,
                         e -> assertThat(e.getStatus().value()).isEqualTo(503));
     }
+
+    @Test
+    void findOrderReservationReadsTheOrdersOutcome() {
+        UUID orderId = UUID.randomUUID();
+        server.expect(requestTo(BASE_URL + "/api/v1/inventory/reservations/orders/" + orderId))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"orderId\":\"" + orderId + "\",\"status\":\"REJECTED\","
+                        + "\"reason\":\"INSUFFICIENT_STOCK\",\"items\":[]}", MediaType.APPLICATION_JSON));
+
+        var found = client.findOrderReservation(orderId);
+
+        assertThat(found).isPresent();
+        assertThat(found.get().reserved()).isFalse();
+        assertThat(found.get().reason()).isEqualTo("INSUFFICIENT_STOCK");
+        server.verify();
+    }
+
+    @Test
+    void findOrderReservationIsEmptyWhenInventoryHasDecidedNothing() {
+        UUID orderId = UUID.randomUUID();
+        server.expect(requestTo(BASE_URL + "/api/v1/inventory/reservations/orders/" + orderId))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND).contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"status\":404,\"error\":\"ORDER_RESERVATION_NOT_FOUND\"}"));
+
+        assertThat(client.findOrderReservation(orderId)).isEmpty();
+    }
+
+    @Test
+    void findOrderReservationFailsLoudlyWhenInventoryIsDown() {
+        UUID orderId = UUID.randomUUID();
+        server.expect(requestTo(BASE_URL + "/api/v1/inventory/reservations/orders/" + orderId))
+                .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+
+        assertThatThrownBy(() -> client.findOrderReservation(orderId))
+                .isInstanceOf(InventoryServiceException.class);
+    }
 }

@@ -75,6 +75,50 @@ public class OrderSagaService {
         }
     }
 
+    /** ASYNC: the order was saved and the reservation command is in the outbox; nothing is reserved yet. */
+    public void orderAccepted(UUID orderId, OrderDraft draft) {
+        metrics.orderCreated();
+        log.info("saga orderId={} state=AWAITING_INVENTORY items={} total={}",
+                orderId, draft.items().size(), draft.totalAmount());
+    }
+
+    /**
+     * ASYNC, the reply is overdue: ask Inventory what it decided and finish the order accordingly.
+     * RESERVED -> CONFIRMED, REJECTED -> CANCELLED with Inventory's reason, nothing decided -> CANCELLED with
+     * RESERVATION_TIMEOUT (if the reservation shows up later, the late-reply path releases it).
+     *
+     * @return true when the order reached a final state (or a reply finished it first), false when
+     *         Inventory could not be asked and a retry is needed
+     */
+    public boolean resolveAwaiting(UUID orderId) {
+
+        Optional<com.mercury.order.dto.OrderReservationSnapshot> decision;
+        long started = System.nanoTime();
+        try {
+            decision = inventoryClient.findOrderReservation(orderId);
+        } catch (RuntimeException e) {
+            log.warn("saga orderId={} operation=ORDER_LOOKUP result=FAILED reason={} durationMs={}",
+                    orderId, e.getMessage(), (System.nanoTime() - started) / 1_000_000);
+            return false;
+        }
+
+        if (decision.isPresent() && decision.get().reserved()) {
+            if (transactions.confirmAwaiting(orderId)) {
+                metrics.orderConfirmed();
+                log.info("saga orderId={} state=CONFIRMED (resolved by lookup)", orderId);
+            }
+            return true;
+        }
+
+        String reason = decision.map(d -> d.reason() == null ? "RESERVATION_REJECTED" : d.reason())
+                .orElse("RESERVATION_TIMEOUT");
+        if (transactions.cancelAwaiting(orderId, reason)) {
+            metrics.orderCancelled();
+            log.info("saga orderId={} state=CANCELLED reason={} (resolved by lookup)", orderId, reason);
+        }
+        return true;
+    }
+
     private void reserve(UUID orderId, OrderDraft.Item item) {
 
         String key = SagaKeys.reservation(orderId, item.productId());
@@ -171,7 +215,13 @@ public class OrderSagaService {
         if (!allSettled) {
             return false;
         }
-        transactions.cancel(orderId);
+        try {
+            transactions.cancel(orderId);
+        } catch (com.mercury.order.exception.StockStillHeldException stillHeld) {
+            // a reservation turned up while this pass ran: not finished, the next pass releases it
+            log.warn("saga orderId={} not cancelled yet: {}", orderId, stillHeld.getMessage());
+            return false;
+        }
         metrics.orderCancelled();
         log.info("saga orderId={} state=CANCELLED", orderId);
         return true;

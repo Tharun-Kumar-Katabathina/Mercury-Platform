@@ -15,6 +15,9 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
     @EntityGraph(attributePaths = "items")
     Optional<Order> findWithItemsById(UUID id);
 
+    @Query("select o.reservationMode from Order o where o.id = :id")
+    Optional<com.mercury.order.model.ReservationMode> findModeById(@Param("id") UUID id);
+
     /** The current status straight from the database, never from a cached entity. */
     @Query("select o.status from Order o where o.id = :id")
     Optional<OrderStatus> findStatusById(@Param("id") UUID id);

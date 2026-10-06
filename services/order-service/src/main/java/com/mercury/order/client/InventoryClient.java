@@ -1,6 +1,7 @@
 package com.mercury.order.client;
 
 import com.mercury.order.dto.InventoryOperationResult;
+import com.mercury.order.dto.OrderReservationSnapshot;
 import com.mercury.order.dto.ReservationSnapshot;
 import com.mercury.order.dto.ReserveInventoryRequest;
 import com.mercury.order.exception.InventoryServiceException;
@@ -72,6 +73,29 @@ public class InventoryClient {
                 if (e.getStatus().value() == 404 && e.getResponseBody() != null
                         && e.getResponseBody().contains("RESERVATION_NOT_FOUND")) {
                     return Optional.<ReservationSnapshot>empty();
+                }
+                throw e;
+            } catch (ResourceAccessException e) {
+                throw new InventoryServiceException(HttpStatus.SERVICE_UNAVAILABLE, null, e);
+            }
+        }, InventoryClient::neverSent);
+    }
+
+    /**
+     * What did Inventory decide for this ASYNC order? Read-only; empty means it has decided nothing (yet),
+     * for example because the command is still queued or was dead-lettered.
+     */
+    public Optional<OrderReservationSnapshot> findOrderReservation(UUID orderId) {
+        return guard.execute(() -> {
+            try {
+                return Optional.ofNullable(restClient.get()
+                        .uri("/api/v1/inventory/reservations/orders/{orderId}", orderId)
+                        .retrieve()
+                        .body(OrderReservationSnapshot.class));
+            } catch (InventoryServiceException e) {
+                if (e.getStatus().value() == 404 && e.getResponseBody() != null
+                        && e.getResponseBody().contains("ORDER_RESERVATION_NOT_FOUND")) {
+                    return Optional.<OrderReservationSnapshot>empty();
                 }
                 throw e;
             } catch (ResourceAccessException e) {

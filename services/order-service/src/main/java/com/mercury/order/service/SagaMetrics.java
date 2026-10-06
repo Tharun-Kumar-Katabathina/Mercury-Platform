@@ -39,7 +39,7 @@ public class SagaMetrics {
                 .description("releases that failed").register(registry);
 
         Gauge.builder("orders.recovery.pending", () ->
-                        sagas.countDue(List.of(SagaState.RESERVING, SagaState.COMPENSATING), Instant.now(clock)))
+                        sagas.countDue(List.of(SagaState.RESERVING, SagaState.AWAITING_INVENTORY, SagaState.COMPENSATING), Instant.now(clock)))
                 .description("sagas that are due for recovery right now").register(registry);
         Gauge.builder("orders.recovery.exhausted", () -> sagas.countByState(SagaState.RECOVERY_FAILED))
                 .description("sagas that gave up and need a person").register(registry);
