@@ -16,4 +16,5 @@ Microservices e-commerce platform.
 
 - [Architecture](docs/architecture.md): services, ports, ownership
 - [Product to Inventory reservation flow](docs/product-inventory-flow.md): API, idempotency, errors, concurrency
+- [Order Service](docs/order-service.md): order creation saga, idempotency, compensation
 - [Local development](docs/local-development.md): run the services, run the tests

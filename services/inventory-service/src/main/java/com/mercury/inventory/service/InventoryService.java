@@ -2,11 +2,14 @@ package com.mercury.inventory.service;
 
 import com.mercury.inventory.dto.CreateInventoryRequest;
 import com.mercury.inventory.dto.InventoryResponse;
+import com.mercury.inventory.dto.ReleaseResponse;
+import com.mercury.inventory.dto.ReleaseResult;
 import com.mercury.inventory.dto.ReservationResponse;
 import com.mercury.inventory.dto.ReservationResult;
 import com.mercury.inventory.dto.UpdateInventoryRequest;
 import com.mercury.inventory.exception.DuplicateInventoryException;
 import com.mercury.inventory.exception.IdempotencyKeyMismatchException;
+import com.mercury.inventory.exception.InsufficientReservedStockException;
 import com.mercury.inventory.exception.InsufficientStockException;
 import com.mercury.inventory.exception.InventoryNotFoundException;
 import com.mercury.inventory.model.IdempotencyRecord;
@@ -29,6 +32,7 @@ import java.util.HexFormat;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Supplier;
 
 @Service
 public class InventoryService {
@@ -92,26 +96,79 @@ public class InventoryService {
 
     /**
      * Moves {@code quantity} units from available to reserved, at most once per
-     * {@code idempotencyKey}.
-     *
+     * {@code idempotencyKey}. Insufficient stock is a business answer: never retried, never
+     * stored, so a later retry is evaluated against current stock.
+     */
+    public ReservationResult reserveInventory(
+            UUID productId, int quantity, String idempotencyKey) {
+
+        IdempotentResult<ReservationResponse> result = executeIdempotently(
+                productId, idempotencyKey,
+                sha256(productId + ":" + quantity),
+                ReservationResponse.class,
+                () -> reserveOnce(productId, quantity));
+
+        return new ReservationResult(result.response(), result.replayed());
+    }
+
+    /**
+     * The reverse of a reservation: moves {@code quantity} units from reserved back to
+     * available, at most once per {@code idempotencyKey}. Releasing more than is reserved
+     * is refused. The hash is prefixed so a release can never be mistaken for a reservation
+     * made with the same key (that is a mismatch, not a replay).
+     */
+    public ReleaseResult releaseInventory(
+            UUID productId, int quantity, String idempotencyKey) {
+
+        IdempotentResult<ReleaseResponse> result = executeIdempotently(
+                productId, idempotencyKey,
+                sha256("RELEASE:" + productId + ":" + quantity),
+                ReleaseResponse.class,
+                () -> releaseOnce(productId, quantity));
+
+        return new ReleaseResult(result.response(), result.replayed());
+    }
+
+    private record IdempotentResult<T>(T response, boolean replayed) {
+    }
+
+    /**
      * Two independent protections work together:
      *  - optimistic locking (@Version) stops concurrent requests from corrupting the stock row;
      *  - the idempotency record stops the SAME logical request from executing twice.
      *
      * Not @Transactional on purpose: every attempt runs in its own transaction so a
      * version conflict re-reads the latest stock (and the latest idempotency record)
-     * instead of retrying on stale state. Insufficient stock is a business answer: it is
-     * never retried and never stored, so a later retry is evaluated against current stock.
+     * instead of retrying on stale state.
      */
-    public ReservationResult reserveInventory(
-            UUID productId, int quantity, String idempotencyKey) {
-
-        String requestHash = requestHash(productId, quantity);
+    private <T> IdempotentResult<T> executeIdempotently(
+            UUID productId,
+            String idempotencyKey,
+            String requestHash,
+            Class<T> responseType,
+            Supplier<T> operation) {
 
         for (int attempt = 1; ; attempt++) {
             try {
-                return transactionTemplate.execute(status ->
-                        reserveOnce(productId, quantity, idempotencyKey, requestHash));
+                return transactionTemplate.execute(status -> {
+                    Optional<IdempotencyRecord> existing =
+                            idempotencyRecordRepository.findByIdempotencyKey(idempotencyKey);
+                    if (existing.isPresent()) {
+                        return replay(existing.get(), idempotencyKey, requestHash, responseType);
+                    }
+
+                    T response = operation.get();
+
+                    // same transaction as the stock change: both commit, or neither does
+                    IdempotencyRecord record = new IdempotencyRecord();
+                    record.setIdempotencyKey(idempotencyKey);
+                    record.setRequestHash(requestHash);
+                    record.setProductId(productId);
+                    record.setResponseBody(jsonMapper.writeValueAsString(response));
+                    idempotencyRecordRepository.saveAndFlush(record);
+
+                    return new IdempotentResult<>(response, false);
+                });
             } catch (ObjectOptimisticLockingFailureException e) {
                 if (attempt >= reserveMaxAttempts) {
                     throw e;
@@ -120,19 +177,13 @@ public class InventoryService {
             } catch (DataIntegrityViolationException e) {
                 // A concurrent request with the same key committed first (unique key).
                 // Its result is now visible, so replay it; otherwise this was something else.
-                return findReplay(idempotencyKey, requestHash).orElseThrow(() -> e);
+                return findReplay(idempotencyKey, requestHash, responseType)
+                        .orElseThrow(() -> e);
             }
         }
     }
 
-    private ReservationResult reserveOnce(
-            UUID productId, int quantity, String idempotencyKey, String requestHash) {
-
-        Optional<IdempotencyRecord> existing =
-                idempotencyRecordRepository.findByIdempotencyKey(idempotencyKey);
-        if (existing.isPresent()) {
-            return replay(existing.get(), idempotencyKey, requestHash);
-        }
+    private ReservationResponse reserveOnce(UUID productId, int quantity) {
 
         Inventory inventory = findByProductId(productId);
 
@@ -145,42 +196,50 @@ public class InventoryService {
         inventory.setReservedQuantity(inventory.getReservedQuantity() + quantity);
 
         // flush so the version check happens inside this attempt's transaction
-        ReservationResponse response = ReservationResponse.from(
-                inventoryRepository.saveAndFlush(inventory), quantity);
-
-        // same transaction as the stock change: both commit, or neither does
-        IdempotencyRecord record = new IdempotencyRecord();
-        record.setIdempotencyKey(idempotencyKey);
-        record.setRequestHash(requestHash);
-        record.setProductId(productId);
-        record.setResponseBody(jsonMapper.writeValueAsString(response));
-        idempotencyRecordRepository.saveAndFlush(record);
-
-        return new ReservationResult(response, false);
+        return ReservationResponse.from(inventoryRepository.saveAndFlush(inventory), quantity);
     }
 
-    private Optional<ReservationResult> findReplay(String idempotencyKey, String requestHash) {
+    private ReleaseResponse releaseOnce(UUID productId, int quantity) {
+
+        Inventory inventory = findByProductId(productId);
+
+        if (inventory.getReservedQuantity() < quantity) {
+            throw new InsufficientReservedStockException(
+                    productId, quantity, inventory.getReservedQuantity());
+        }
+
+        inventory.setAvailableQuantity(inventory.getAvailableQuantity() + quantity);
+        inventory.setReservedQuantity(inventory.getReservedQuantity() - quantity);
+
+        return ReleaseResponse.from(inventoryRepository.saveAndFlush(inventory), quantity);
+    }
+
+    private <T> Optional<IdempotentResult<T>> findReplay(
+            String idempotencyKey, String requestHash, Class<T> responseType) {
+
         return Optional.ofNullable(transactionTemplate.execute(status ->
                 idempotencyRecordRepository.findByIdempotencyKey(idempotencyKey)
-                        .map(record -> replay(record, idempotencyKey, requestHash))
+                        .map(record -> replay(record, idempotencyKey, requestHash, responseType))
                         .orElse(null)));
     }
 
-    private ReservationResult replay(
-            IdempotencyRecord record, String idempotencyKey, String requestHash) {
+    private <T> IdempotentResult<T> replay(
+            IdempotencyRecord record,
+            String idempotencyKey,
+            String requestHash,
+            Class<T> responseType) {
 
         if (!record.getRequestHash().equals(requestHash)) {
             throw new IdempotencyKeyMismatchException(idempotencyKey);
         }
-        return new ReservationResult(
-                jsonMapper.readValue(record.getResponseBody(), ReservationResponse.class),
-                true);
+        return new IdempotentResult<>(
+                jsonMapper.readValue(record.getResponseBody(), responseType), true);
     }
 
-    private static String requestHash(UUID productId, int quantity) {
+    private static String sha256(String value) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest((productId + ":" + quantity).getBytes(StandardCharsets.UTF_8));
+                    .digest(value.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest);
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 is not available", e);

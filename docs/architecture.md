@@ -9,9 +9,10 @@ Kafka, Saga, Redis, Resilience4j) are not built and are not described here.
 |---|---|---|---|
 | Product Service | 8081 | Products (`products` table, database `mercury_product`) | Spring Boot 4.0.8, Java 21 |
 | Inventory Service | 8082 | Stock and idempotency records (`inventory`, `idempotency_records`, database `mercury_inventory`) | Spring Boot 4.0.8, Java 21 |
-| PostgreSQL | 5432 | Both databases, in one server | `postgres:17` via `docker-compose.yml` |
+| Order Service | 8083 | Orders, order items, order idempotency records (`orders`, `order_items`, `order_idempotency_records`, database `mercury_order`) | Spring Boot 4.0.8, Java 21; see [Order Service](order-service.md) |
+| PostgreSQL | 5432 | One database per service, in one server | `postgres:17` via `docker-compose.yml` |
 
-Both services expose Spring Actuator health at `/actuator/health`.
+Every service exposes Spring Actuator health at `/actuator/health`.
 
 ## Request flow
 
@@ -60,12 +61,15 @@ Rules that hold in the code today:
 
 ## Why HTTP (for now)
 
-Phase 6 deliberately builds the synchronous foundation first: a plain REST call is easy to
-reason about and test. No messaging, saga, or resilience library is involved yet.
+Services call each other with plain synchronous REST: easy to reason about and test. The Order
+Service coordinates Product and Inventory as an orchestrated saga with compensating calls (see
+[Order Service](order-service.md)); there is no messaging (Kafka) and no resilience library yet,
+only client timeouts.
 
 ## Related documents
 
 - [Product to Inventory reservation flow](product-inventory-flow.md): API, idempotency,
   error propagation, concurrency.
+- [Order Service](order-service.md): order creation saga, idempotency, compensation.
 - [Local development](local-development.md): starting everything, environment variables,
   running the tests, caveats.

@@ -1,5 +1,7 @@
 # Local development: Product and Inventory services
 
+> The Order Service (port 8083) has its own section in [order-service.md](order-service.md#12-local-development).
+
 How to run the Product and Inventory services locally and how to run their tests.
 Requirements: Java 21, Docker. Maven is not needed; each service ships its own `./mvnw`.
 
@@ -141,7 +143,7 @@ of them.
 
 | Service | Tests | Database used |
 |---|---|---|
-| Inventory | 20 | In-memory H2 (PostgreSQL mode), schema from Flyway, `ddl-auto=validate` |
+| Inventory | 33 | In-memory H2 (PostgreSQL mode), schema from Flyway, `ddl-auto=validate` |
 | Product | 27 (21 normal + 6 integration) | In-memory H2 for the 21 normal tests |
 
 Product's suite includes the real integration test (below) and therefore needs Docker. To run

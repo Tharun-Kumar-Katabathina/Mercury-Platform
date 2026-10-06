@@ -42,6 +42,7 @@ On a replay the same body is returned with the extra response header
 | `GET` | `/api/v1/inventory/{productId}` | Read stock |
 | `PUT` | `/api/v1/inventory/{productId}` | Set `availableQuantity` |
 | `POST` | `/api/v1/inventory/{productId}/reserve` | Reserve stock; needs `Idempotency-Key` (required, not blank, max 255 characters) |
+| `POST` | `/api/v1/inventory/{productId}/release` | Give reserved stock back; same key rules; `409 INSUFFICIENT_RESERVED_STOCK` if more than reserved |
 
 The Inventory reserve response additionally contains `updatedAt`; Product Service ignores
 fields it does not need.
@@ -185,7 +186,7 @@ What has been observed (not guarantees beyond the invariant):
 | `InventoryClientTests` (Product) | 7 | Exact requests sent by the client, key forwarding, replay-flag parsing, error translation (404/409/500/unreachable) |
 | `ProductReservationApiTests` (Product) | 13 | Product-side decisions with a **mocked** `InventoryClient`: validation order, product check, pass-through of Inventory errors, 502/503 |
 | `ProductInventoryIntegrationTests` (Product) | 6 | The **real** stack, see below |
-| Inventory suites | 20 | CRUD, `@Version` stale-write rejection, reservation, idempotency, concurrency (H2) |
+| Inventory suites | 33 | CRUD, `@Version` stale-write rejection, reservation, idempotency, concurrency (H2) |
 
 ### The real Product → Inventory → PostgreSQL integration test
 
@@ -219,5 +220,5 @@ automatically when the JVM exits.
 - `Product.quantity` (a field on the product) is independent of Inventory's stock; nothing keeps
   them in sync.
 - Product Service does not create inventory records; they must be created via Inventory Service.
-- There is no `releaseInventory` operation yet; reserved stock cannot be returned.
+- Inventory now has a release endpoint (`POST /api/v1/inventory/{productId}/release`), used by Order Service for compensation; Product Service does not call it. See [Order Service](order-service.md#6-inventory-integration).
 - The real integration test has its own caveats, see [Local development](local-development.md#caveats).

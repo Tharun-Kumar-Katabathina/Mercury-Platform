@@ -2,6 +2,9 @@ package com.mercury.inventory.controller;
 
 import com.mercury.inventory.dto.CreateInventoryRequest;
 import com.mercury.inventory.dto.InventoryResponse;
+import com.mercury.inventory.dto.ReleaseInventoryRequest;
+import com.mercury.inventory.dto.ReleaseResponse;
+import com.mercury.inventory.dto.ReleaseResult;
 import com.mercury.inventory.dto.ReservationResponse;
 import com.mercury.inventory.dto.ReservationResult;
 import com.mercury.inventory.dto.ReserveInventoryRequest;
@@ -55,6 +58,22 @@ public class InventoryController {
             @Valid @RequestBody ReserveInventoryRequest request) {
 
         ReservationResult result = inventoryService.reserveInventory(
+                productId, request.quantity(), idempotencyKey);
+
+        ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+        if (result.replayed()) {
+            response.header("Idempotent-Replayed", "true");
+        }
+        return response.body(result.response());
+    }
+
+    @PostMapping("/{productId}/release")
+    public ResponseEntity<ReleaseResponse> releaseInventory(
+            @PathVariable UUID productId,
+            @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 255) String idempotencyKey,
+            @Valid @RequestBody ReleaseInventoryRequest request) {
+
+        ReleaseResult result = inventoryService.releaseInventory(
                 productId, request.quantity(), idempotencyKey);
 
         ResponseEntity.BodyBuilder response = ResponseEntity.ok();

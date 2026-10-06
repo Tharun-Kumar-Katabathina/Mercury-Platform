@@ -34,6 +34,14 @@ public class GlobalExceptionHandler {
         return body(409, "INSUFFICIENT_STOCK", exception.getMessage());
     }
 
+    @ExceptionHandler(InsufficientReservedStockException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public Map<String, Object> handleInsufficientReservedStock(
+            InsufficientReservedStockException exception) {
+
+        return body(409, "INSUFFICIENT_RESERVED_STOCK", exception.getMessage());
+    }
+
     @ExceptionHandler(IdempotencyKeyMismatchException.class)
     @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
     public Map<String, Object> handleIdempotencyKeyMismatch(
