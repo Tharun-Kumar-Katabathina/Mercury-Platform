@@ -1,0 +1,364 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Mercury Platform Architecture",
+    "output": "docs/diagrams/mercury-architecture.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "Client",
+      "sublabel": "browser / app",
+      "pos": [
+        30,
+        495
+      ],
+      "size": [
+        100,
+        60
+      ]
+    },
+    {
+      "id": "gateway",
+      "type": "security",
+      "label": "API Gateway",
+      "sublabel": ":8090 JWT + limits",
+      "tag": "only public entry",
+      "pos": [
+        190,
+        380
+      ],
+      "size": [
+        120,
+        290
+      ]
+    },
+    {
+      "id": "qdrant",
+      "type": "database",
+      "label": "Qdrant",
+      "sublabel": "vectors :6333",
+      "pos": [
+        420,
+        40
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "reco",
+      "type": "backend",
+      "label": "Recommendation",
+      "sublabel": ":8086 own DB",
+      "pos": [
+        420,
+        150
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "redis",
+      "type": "database",
+      "label": "Redis",
+      "sublabel": "cache only :6379",
+      "pos": [
+        420,
+        260
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "product",
+      "type": "backend",
+      "label": "Product Service",
+      "sublabel": ":8081 own DB",
+      "pos": [
+        420,
+        370
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "order",
+      "type": "backend",
+      "label": "Order Service",
+      "sublabel": ":8083 saga, own DB",
+      "pos": [
+        420,
+        480
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "notification",
+      "type": "backend",
+      "label": "Notification",
+      "sublabel": ":8084 own DB",
+      "pos": [
+        420,
+        620
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "user",
+      "type": "security",
+      "label": "User Service",
+      "sublabel": ":8085 RS256 issuer",
+      "pos": [
+        420,
+        730
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "inventory",
+      "type": "backend",
+      "label": "Inventory Service",
+      "sublabel": ":8082 own DB",
+      "tag": "internal only",
+      "pos": [
+        760,
+        370
+      ],
+      "size": [
+        170,
+        60
+      ]
+    },
+    {
+      "id": "kafka",
+      "type": "messagebus",
+      "label": "Kafka",
+      "sublabel": ":9092 KRaft",
+      "pos": [
+        760,
+        490
+      ],
+      "size": [
+        170,
+        200
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Kubernetes namespace: mercury (default-deny ingress)",
+      "wraps": [
+        "gateway",
+        "qdrant",
+        "reco",
+        "redis",
+        "product",
+        "order",
+        "notification",
+        "user",
+        "inventory",
+        "kafka"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "client-to-gateway",
+      "from": "client",
+      "to": "gateway",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "id": "gw-to-reco",
+      "from": "gateway",
+      "to": "reco",
+      "label": "/recommendations",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "gw-to-product",
+      "from": "gateway",
+      "to": "product",
+      "label": "/products",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        385,
+        362
+      ]
+    },
+    {
+      "id": "gw-to-order",
+      "from": "gateway",
+      "to": "order",
+      "label": "/orders",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "id": "gw-to-notification",
+      "from": "gateway",
+      "to": "notification",
+      "label": "/notifications"
+    },
+    {
+      "id": "gw-to-user",
+      "from": "gateway",
+      "to": "user",
+      "label": "/auth, /users",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "reco-to-qdrant",
+      "from": "reco",
+      "to": "qdrant",
+      "label": "vectors"
+    },
+    {
+      "id": "reco-to-redis",
+      "from": "reco",
+      "to": "redis",
+      "label": "cache"
+    },
+    {
+      "id": "product-to-redis",
+      "from": "product",
+      "to": "redis",
+      "label": "cache"
+    },
+    {
+      "id": "order-to-product",
+      "from": "order",
+      "to": "product",
+      "label": "validate"
+    },
+    {
+      "id": "product-to-inventory",
+      "from": "product",
+      "to": "inventory",
+      "label": "reserve (REST)",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "order-to-inventory",
+      "from": "order",
+      "to": "inventory",
+      "label": "reserve (SYNC)",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "order-to-kafka",
+      "from": "order",
+      "to": "kafka",
+      "label": "events + commands",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "kafka-to-order",
+      "from": "kafka",
+      "to": "order",
+      "label": "replies",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "kafka-to-inventory",
+      "from": "kafka",
+      "to": "inventory",
+      "label": "commands",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "inventory-to-kafka",
+      "from": "inventory",
+      "to": "kafka",
+      "label": "replies",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "kafka-to-notification",
+      "from": "kafka",
+      "to": "notification",
+      "label": "order events",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "kafka-to-reco",
+      "from": "kafka",
+      "to": "reco",
+      "label": "order events",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "right",
+      "labelAt": [
+        800,
+        168
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Synchronous (REST)",
+      "items": [
+        "Client reaches services only through the gateway",
+        "Order validates products, then reserves stock (SYNC mode, the default)",
+        "Inventory has no gateway route"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Asynchronous (Kafka)",
+      "items": [
+        "Services write events to a transactional outbox, then a publisher sends them",
+        "ASYNC mode: Order sends a reservation command, Inventory answers with a reply",
+        "Notification and Recommendation consume order events in their own groups"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Security + data",
+      "items": [
+        "User Service issues RS256 JWTs; the gateway verifies them",
+        "One PostgreSQL server, one database per service (named on each node)",
+        "Redis holds cache only; nothing is stored only there"
+      ]
+    }
+  ]
+}

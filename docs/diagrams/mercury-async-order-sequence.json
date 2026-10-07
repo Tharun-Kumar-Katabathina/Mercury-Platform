@@ -1,0 +1,237 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Mercury ASYNC Order Reservation",
+    "output": "docs/diagrams/mercury-async-order-sequence.html",
+    "viewBox": [
+      1080,
+      670
+    ],
+    "column_fit": "spread",
+    "quality_profile": "showcase"
+  },
+  "participants": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "Client",
+      "sublabel": "browser / app"
+    },
+    {
+      "id": "gateway",
+      "type": "security",
+      "label": "API Gateway",
+      "sublabel": "JWT + rate limit"
+    },
+    {
+      "id": "order",
+      "type": "backend",
+      "label": "Order Service",
+      "sublabel": "saga + outbox"
+    },
+    {
+      "id": "kafka",
+      "type": "messagebus",
+      "label": "Kafka",
+      "sublabel": "commands + events"
+    },
+    {
+      "id": "inventory",
+      "type": "backend",
+      "label": "Inventory Service",
+      "sublabel": "all-or-nothing"
+    },
+    {
+      "id": "notification",
+      "type": "backend",
+      "label": "Notification",
+      "sublabel": "consumer"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 280,
+      "label": "Accept (202)"
+    },
+    {
+      "from": 290,
+      "to": 404,
+      "label": "Reserve + reply"
+    },
+    {
+      "from": 416,
+      "to": 468,
+      "label": "Event"
+    },
+    {
+      "from": 480,
+      "to": 540,
+      "label": "Deadline fallback"
+    }
+  ],
+  "messages": [
+    {
+      "id": "post-order",
+      "from": "client",
+      "to": "gateway",
+      "y": 172,
+      "label": "POST /orders",
+      "variant": "emphasis",
+      "note": "Idempotency-Key header"
+    },
+    {
+      "id": "forward-order",
+      "from": "gateway",
+      "to": "order",
+      "y": 198,
+      "label": "forward (JWT ok)",
+      "variant": "security"
+    },
+    {
+      "id": "accepted",
+      "from": "order",
+      "to": "gateway",
+      "y": 238,
+      "label": "202 + Location",
+      "variant": "return",
+      "note": "one transaction: PENDING order, saga AWAITING_INVENTORY, outbox rows"
+    },
+    {
+      "id": "accepted-client",
+      "from": "gateway",
+      "to": "client",
+      "y": 264,
+      "label": "202 Accepted",
+      "variant": "return"
+    },
+    {
+      "id": "publish-command",
+      "from": "order",
+      "to": "kafka",
+      "y": 302,
+      "label": "outbox: reserve command",
+      "variant": "dashed"
+    },
+    {
+      "id": "deliver-command",
+      "from": "kafka",
+      "to": "inventory",
+      "y": 328,
+      "label": "deliver command",
+      "variant": "dashed"
+    },
+    {
+      "id": "publish-reply",
+      "from": "inventory",
+      "to": "kafka",
+      "y": 366,
+      "label": "outbox: reserved / rejected",
+      "variant": "dashed",
+      "note": "reserve all items or none, in one transaction"
+    },
+    {
+      "id": "deliver-reply",
+      "from": "kafka",
+      "to": "order",
+      "y": 392,
+      "label": "deliver reply",
+      "variant": "dashed"
+    },
+    {
+      "id": "publish-final",
+      "from": "order",
+      "to": "kafka",
+      "y": 430,
+      "label": "outbox: confirmed / cancelled",
+      "variant": "dashed"
+    },
+    {
+      "id": "deliver-final",
+      "from": "kafka",
+      "to": "notification",
+      "y": 456,
+      "label": "order event",
+      "variant": "dashed"
+    },
+    {
+      "id": "lookup",
+      "from": "order",
+      "to": "inventory",
+      "y": 494,
+      "label": "GET reservation by order",
+      "variant": "dashed",
+      "note": "only when no reply by the deadline"
+    },
+    {
+      "id": "lookup-result",
+      "from": "inventory",
+      "to": "order",
+      "y": 526,
+      "label": "RESERVED / REJECTED / 404",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "gateway",
+      "from": 168,
+      "to": 268,
+      "type": "security"
+    },
+    {
+      "participant": "order",
+      "from": 194,
+      "to": 242,
+      "type": "backend"
+    },
+    {
+      "participant": "inventory",
+      "from": 324,
+      "to": 372,
+      "type": "backend"
+    },
+    {
+      "participant": "order",
+      "from": 388,
+      "to": 434,
+      "type": "backend"
+    },
+    {
+      "participant": "inventory",
+      "from": 490,
+      "to": 530,
+      "type": "backend"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Accept fast",
+      "items": [
+        "Order answers 202 after one local transaction",
+        "The reservation command is an outbox row, not a live call",
+        "Same Idempotency-Key replays the same order"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Reply or deadline",
+      "items": [
+        "Inventory reserves every item atomically, or rejects the order",
+        "No reply by the deadline: Order asks Inventory directly",
+        "An unreachable Inventory never cancels an order on a guess"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Delivery",
+      "items": [
+        "Outbox publishers give at-least-once delivery",
+        "Consumers store processed event ids, so duplicates change nothing",
+        "Clients poll GET /orders/{id} until the order is CONFIRMED or CANCELLED"
+      ]
+    }
+  ]
+}

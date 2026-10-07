@@ -1,0 +1,189 @@
+{
+  "schema_version": 2,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Mercury Order Saga Lifecycle",
+    "output": "docs/diagrams/mercury-order-saga-lifecycle.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "Synchronous saga"
+    },
+    {
+      "id": "waiting",
+      "label": "Async wait"
+    },
+    {
+      "id": "recovery",
+      "label": "Compensation"
+    },
+    {
+      "id": "terminal",
+      "label": "Final outcome"
+    }
+  ],
+  "states": [
+    {
+      "id": "accepted",
+      "type": "start",
+      "label": "PENDING",
+      "sublabel": "order + saga created",
+      "lane": "main",
+      "col": 0,
+      "step": "01"
+    },
+    {
+      "id": "reserving",
+      "type": "active",
+      "label": "RESERVING",
+      "sublabel": "SYNC: REST per item",
+      "lane": "main",
+      "col": 1,
+      "step": "02"
+    },
+    {
+      "id": "confirmed",
+      "type": "success",
+      "label": "CONFIRMED",
+      "sublabel": "stock reserved",
+      "lane": "main",
+      "col": 4,
+      "tag": "final"
+    },
+    {
+      "id": "compensating",
+      "type": "active",
+      "label": "COMPENSATING",
+      "sublabel": "release stock, retry",
+      "lane": "recovery",
+      "col": 1,
+      "tag": "backoff"
+    },
+    {
+      "id": "awaiting",
+      "type": "waiting",
+      "label": "AWAITING_INVENTORY",
+      "sublabel": "ASYNC: reply pending",
+      "lane": "waiting",
+      "col": 2,
+      "tag": "deadline"
+    },
+    {
+      "id": "cancelled",
+      "type": "failure",
+      "label": "CANCELLED",
+      "sublabel": "stock given back",
+      "lane": "terminal",
+      "col": 2,
+      "tag": "final"
+    },
+    {
+      "id": "recovery_failed",
+      "type": "failure",
+      "label": "RECOVERY_FAILED",
+      "sublabel": "needs a person",
+      "lane": "terminal",
+      "col": 4,
+      "tag": "final"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t-sync",
+      "from": "accepted",
+      "to": "reserving",
+      "label": "SYNC mode"
+    },
+    {
+      "id": "t-async",
+      "from": "accepted",
+      "to": "awaiting",
+      "label": "ASYNC mode",
+      "variant": "emphasis"
+    },
+    {
+      "id": "t-all-reserved",
+      "from": "reserving",
+      "to": "confirmed",
+      "label": "all reserved"
+    },
+    {
+      "id": "t-sync-fail",
+      "from": "reserving",
+      "to": "compensating",
+      "label": "failed / crashed",
+      "variant": "security"
+    },
+    {
+      "id": "t-async-reserved",
+      "from": "awaiting",
+      "to": "confirmed",
+      "label": "reserved",
+      "variant": "emphasis"
+    },
+    {
+      "id": "t-async-rejected",
+      "from": "awaiting",
+      "to": "cancelled",
+      "label": "rejected / timeout"
+    },
+    {
+      "id": "t-lookup-fails",
+      "from": "awaiting",
+      "to": "recovery_failed",
+      "label": "lookup keeps failing",
+      "variant": "security"
+    },
+    {
+      "id": "t-released",
+      "from": "compensating",
+      "to": "cancelled",
+      "label": "stock released"
+    },
+    {
+      "id": "t-retries-out",
+      "from": "compensating",
+      "to": "recovery_failed",
+      "label": "retries exhausted",
+      "variant": "security"
+    },
+    {
+      "id": "t-late",
+      "from": "cancelled",
+      "to": "compensating",
+      "label": "late reservation",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One rule",
+      "items": [
+        "An order that does not reach CONFIRMED always ends CANCELLED",
+        "All of its stock is given back first",
+        "Recovery has exactly one way forward from any state"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Two paths in",
+      "items": [
+        "SYNC is the default: Order reserves per item over REST",
+        "ASYNC hands the whole order to Inventory over Kafka",
+        "Each order keeps the mode it was created with"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Never guess",
+      "items": [
+        "A saga is never cancelled on a guess when Inventory is unreachable",
+        "Retries are bounded; then a person looks (RECOVERY_FAILED)",
+        "A late reservation reopens the saga as COMPENSATING"
+      ]
+    }
+  ]
+}
