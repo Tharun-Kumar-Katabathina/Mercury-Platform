@@ -2,7 +2,11 @@ global:
   scrape_interval: 5s          # short on purpose: dashboards react within seconds in demos and load tests
   evaluation_interval: 15s
 
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
+  # DNS service discovery: every replica of a service is scraped, so `--scale order-service=3` just works
   - job_name: mercury-services
     metrics_path: /actuator/prometheus
     metric_relabel_configs:
@@ -12,19 +16,25 @@ scrape_configs:
         regex: orders_total
         target_label: __name__
         replacement: orders_created_total
-    static_configs:
-      - targets: ["product-service:8081"]
-        labels: { service: product-service }
-      - targets: ["inventory-service:8082"]
-        labels: { service: inventory-service }
-      - targets: ["order-service:8083"]
-        labels: { service: order-service }
-      - targets: ["notification-service:8084"]
-        labels: { service: notification-service }
+    dns_sd_configs:
+      - { names: [product-service], type: A, port: 8081, refresh_interval: 5s }
+      - { names: [inventory-service], type: A, port: 8082, refresh_interval: 5s }
+      - { names: [order-service], type: A, port: 8083, refresh_interval: 5s }
+      - { names: [notification-service], type: A, port: 8084, refresh_interval: 5s }
+      - { names: [user-service], type: A, port: 8085, refresh_interval: 5s }
+      - { names: [recommendation-service], type: A, port: 8086, refresh_interval: 5s }
+      - { names: [api-gateway], type: A, port: 8090, refresh_interval: 5s }
+    relabel_configs:
+      - source_labels: [__meta_dns_name]
+        target_label: service
 
   - job_name: kafka
     static_configs:
       - targets: ["kafka-exporter:9308"]
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
 
   - job_name: postgres
     static_configs:

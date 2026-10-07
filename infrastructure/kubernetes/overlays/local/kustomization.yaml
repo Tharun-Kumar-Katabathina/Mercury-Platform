@@ -8,6 +8,9 @@ images:
   - { name: mercury/inventory-service,    newTag: dev }
   - { name: mercury/order-service,        newTag: dev }
   - { name: mercury/notification-service, newTag: dev }
+  - { name: mercury/user-service,         newTag: dev }
+  - { name: mercury/api-gateway,          newTag: dev }
+  - { name: mercury/recommendation-service, newTag: dev }
 patches:
   - target: { kind: Deployment, labelSelector: "mercury/tier=app" }
     patch: |-

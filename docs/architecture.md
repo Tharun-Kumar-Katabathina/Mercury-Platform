@@ -10,11 +10,16 @@ Redis) are not built and are not described here.
 | Product Service | 8081 | Products (`products` table, database `mercury_product`) | Spring Boot 4.0.8, Java 21 |
 | Inventory Service | 8082 | Stock and idempotency records (`inventory`, `idempotency_records`, database `mercury_inventory`) | Spring Boot 4.0.8, Java 21 |
 | Order Service | 8083 | Orders, order items, order idempotency records (`orders`, `order_items`, `order_idempotency_records`, database `mercury_order`) | Spring Boot 4.0.8, Java 21; see [Order Service](order-service.md) |
+| API Gateway | 8090 | nothing (stateless) | the only public entry point: authentication, rate limits, CORS, routing; see [Security](security.md) |
+| User Service | 8085 | Accounts (`users`, database `mercury_user`) | registration, login, JWT issuing (RS256); see [Security](security.md) |
+| Recommendation Service | 8086 | Purchase features (database `mercury_recommendation`), vectors in Qdrant, cache in Redis | learns from order events; see [Recommendations](recommendations.md) |
 | Notification Service | 8084 | Notifications (`notification`, database `mercury_notification`) | consumes order events from Kafka; see [Event-driven architecture](event-driven-architecture.md) |
+| Redis | 6379 | Cache only (product lookups, recommendations); nothing is stored only here | `redis:7-alpine`, bounded, no persistence |
+| Qdrant | 6333 | Product vectors for similarity search | `qdrant/qdrant:v1.19.1` |
 | Kafka | 9092 | Durable domain events and reservation messages (`mercury.order.events`, `mercury.inventory.commands`, `mercury.inventory.events`, and a `.dlq` for each) | `apache/kafka:3.9.0`, KRaft mode, via `docker-compose.yml` |
 | PostgreSQL | 5432 | One database per service, in one server | `postgres:17` via `docker-compose.yml` |
 
-Every service exposes Spring Actuator health at `/actuator/health`.
+Every service exposes Spring Actuator health at `/actuator/health` (liveness and readiness probes beneath it) and Prometheus metrics at `/actuator/prometheus`. All APIs require a token from the User Service unless listed as public ([Security](security.md)); Inventory is internal and has no route at the gateway.
 
 ## Synchronous and asynchronous
 
@@ -90,5 +95,6 @@ client timeouts, and (in Order Service) a circuit breaker, a bulkhead and a dura
 - [Event-driven architecture](event-driven-architecture.md): Kafka topology, event contracts, outbox, consumer idempotency, dead-lettering.
 - [Asynchronous inventory reservation](async-reservation.md): Phase 10, the ASYNC order flow, deadline recovery, late reservations.
 - [Saga reliability and recovery](saga-recovery.md): durable saga state, recovery worker, circuit breaker, failure scenarios.
+- [Security](security.md), [Resilience](resilience.md), [Performance](performance.md), [Recommendations](recommendations.md), [CI/CD](ci-cd.md), [Observability](observability.md), [Infrastructure](infrastructure.md).
 - [Local development](local-development.md): starting everything, environment variables,
   running the tests, caveats.

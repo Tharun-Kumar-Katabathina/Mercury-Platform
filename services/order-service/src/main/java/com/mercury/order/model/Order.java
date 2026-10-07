@@ -28,6 +28,10 @@ public class Order {
     @Column(nullable = false, length = 10)
     private ReservationMode reservationMode = ReservationMode.SYNC;
 
+    /** who placed it (the token subject); null when security was off. Only that customer and administrators may read it. */
+    @Column(name = "customer_id", length = 100)
+    private String customerId;
+
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<OrderItem> items = new ArrayList<>();
 
@@ -50,6 +54,15 @@ public class Order {
         order.totalAmount = totalAmount;
         order.reservationMode = mode;
         return order;
+    }
+
+    public Order ownedBy(String customerId) {
+        this.customerId = customerId;
+        return this;
+    }
+
+    public String getCustomerId() {
+        return customerId;
     }
 
     public void addItem(OrderItem item) {

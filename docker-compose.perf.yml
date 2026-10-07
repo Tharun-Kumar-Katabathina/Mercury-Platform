@@ -1,0 +1,43 @@
+# Performance testing (Phase 14). Adds a load balancer in front of the services so Order and Product can be
+# scaled horizontally, and removes the host ports of the scalable services (replicas cannot share a host port).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml -f docker-compose.perf.yml \
+#       --profile platform up -d --scale order-service=2 --scale product-service=2
+#
+# Everything the load tests vary is an environment variable: PRODUCT_CACHE_ENABLED, DB_POOL_SIZE,
+# TOMCAT_MAX_THREADS, ORDER_RESERVATION_MODE ...  Used by scripts/perf/run.py.
+
+services:
+  product-service:
+    ports: !reset []
+    environment: &tuned
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+      DB_POOL_MIN_IDLE: ${DB_POOL_MIN_IDLE:-10}
+      TOMCAT_MAX_THREADS: ${TOMCAT_MAX_THREADS:-200}
+      TOMCAT_MAX_CONNECTIONS: ${TOMCAT_MAX_CONNECTIONS:-8192}
+      TOMCAT_ACCEPT_COUNT: ${TOMCAT_ACCEPT_COUNT:-100}
+  order-service:
+    ports: !reset []
+    environment: *tuned
+  inventory-service:
+    environment: *tuned
+  notification-service:
+    environment: *tuned
+
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./infrastructure/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports: ["127.0.0.1:8080:8080"]
+    ulimits:
+      nofile: { soft: 65535, hard: 65535 }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 128M }
+    networks: [data, edge]

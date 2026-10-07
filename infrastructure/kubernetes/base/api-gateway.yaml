@@ -1,0 +1,130 @@
+# api-gateway: Deployment, Service, HorizontalPodAutoscaler, PodDisruptionBudget.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  labels: { app.kubernetes.io/name: api-gateway, app.kubernetes.io/part-of: mercury, mercury/tier: app }
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }     # never drop below the desired number of ready pods
+  selector:
+    matchLabels: { app.kubernetes.io/name: api-gateway }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: api-gateway, app.kubernetes.io/part-of: mercury, mercury/tier: app }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /actuator/prometheus
+        prometheus.io/port: "8090"
+    spec:
+      terminationGracePeriodSeconds: 45                   # > preStop (5s) + graceful shutdown phase (25s)
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app.kubernetes.io/name: api-gateway }
+      containers:
+        - name: api-gateway
+          image: mercury/api-gateway:dev                        # set per environment by the overlay (images:)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8090 }
+          env:
+            - { name: SERVER_PORT, value: "8090" }
+            - { name: SHUTDOWN_TIMEOUT, value: 25s }
+            - { name: JWT_PUBLIC_KEY_FILE, value: /run/secrets/jwt/jwt-public.pem }
+            - { name: USER_SERVICE_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: USER_SERVICE_URL } } }
+            - { name: SERVICE_CLIENT_ID, value: api-gateway }
+            - { name: SERVICE_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: mercury-secrets, key: ORDER_SERVICE_SECRET } } }
+            - { name: USER_SERVICE_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: USER_SERVICE_URL } } }
+            - { name: PRODUCT_SERVICE_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: PRODUCT_SERVICE_URL } } }
+            - { name: ORDER_SERVICE_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: ORDER_SERVICE_URL } } }
+            - { name: NOTIFICATION_SERVICE_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: NOTIFICATION_SERVICE_URL } } }
+            - { name: JWT_PUBLIC_KEY_FILE, value: /run/secrets/jwt/jwt-public.pem }
+            - { name: CORS_ALLOWED_ORIGINS, valueFrom: { configMapKeyRef: { name: mercury-config, key: CORS_ALLOWED_ORIGINS } } }
+          resources:
+            requests: { cpu: 150m, memory: 256Mi }
+            limits:   { cpu: 2000m, memory: 512Mi }
+          # startup: allow a slow first start without the liveness probe killing the pod
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 5
+            failureThreshold: 36
+          # liveness: the process is wedged -> restart it (never depends on the database or Kafka)
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # readiness: take it out of the Service while the database is unreachable
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec: { command: ["sleep", "5"] }           # let endpoint removal propagate before SIGTERM
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: jwt, mountPath: /run/secrets/jwt, readOnly: true }
+            - { name: jwt, mountPath: /run/secrets/jwt, readOnly: true }
+      volumes:
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 64Mi }
+        - name: jwt
+          secret: { secretName: mercury-jwt-keys, items: [ { key: jwt-public.pem, path: jwt-public.pem } ] }
+        - name: jwt
+          secret: { secretName: mercury-jwt-keys, items: [ { key: jwt-public.pem, path: jwt-public.pem } ] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  labels: { app.kubernetes.io/name: api-gateway, app.kubernetes.io/part-of: mercury }
+spec:
+  type: LoadBalancer            # the only public entry point; put an Ingress with TLS in front in a real cluster
+  selector: { app.kubernetes.io/name: api-gateway }
+  ports:
+    - { name: http, port: 8090, targetPort: http }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-gateway
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: api-gateway }
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
+    - type: Resource
+      resource: { name: memory, target: { type: Utilization, averageUtilization: 80 } }
+  behavior:
+    scaleUp:   { stabilizationWindowSeconds: 30, policies: [ { type: Pods, value: 2, periodSeconds: 30 } ] }
+    scaleDown: { stabilizationWindowSeconds: 300, policies: [ { type: Pods, value: 1, periodSeconds: 60 } ] }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-gateway
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: api-gateway }

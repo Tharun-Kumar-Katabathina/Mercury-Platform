@@ -43,7 +43,7 @@ remote calls, where every step that can fail has a defined way to be undone (sec
 
 ### `POST /api/v1/orders`
 
-Header `Idempotency-Key: <client key>` (required, at most 255 characters).
+Header `Authorization: Bearer <token>` (a customer or administrator token; see [security.md](security.md)) and `Idempotency-Key: <client key>` (required, at most 255 characters). The key is scoped to the caller: two customers may use the same key and get two orders.
 
 ```json
 { "items": [ { "productId": "…", "quantity": 2 } ] }
@@ -72,7 +72,7 @@ Rules: `items` must not be empty; every item needs a `productId` and `quantity >
 
 ### `GET /api/v1/orders/{orderId}`
 
-Returns the persisted order as it was snapshotted (`200`), or `404 ORDER_NOT_FOUND`.
+Returns the persisted order as it was snapshotted (`200`), or `404 ORDER_NOT_FOUND`. A customer can read only their own orders: another customer's order is a `404`, indistinguishable from one that does not exist. Administrators and services can read any order.
 
 ## 3. Database
 
@@ -219,6 +219,10 @@ Any other 4xx from a downstream service keeps its status and message; if its bod
 the code is `PRODUCT_REQUEST_REJECTED` / `INVENTORY_REQUEST_REJECTED`.
 
 ## 10. Timeouts, resilience and observability
+
+**Circuit breaker window.** The breakers can look at the last N *calls* (`COUNT_BASED`, the default) or the last N *seconds* (`TIME_BASED`: `ORDER_PRODUCT_CB_WINDOW_TYPE`, `ORDER_INVENTORY_CB_WINDOW_TYPE`, with the window size in seconds). The chaos suite showed why the deployed configuration uses `TIME_BASED`: with a count window, five failures from an outage were still among the last ten calls after the dependency had fully recovered, so the tenth call found a 50 % failure rate and opened the circuit on a healthy service. With a time window the outage ages out by itself (`DownstreamGuardTests` demonstrates both).
+
+**Database outage.** While PostgreSQL is unavailable, services answer `503 DATABASE_UNAVAILABLE` with `Retry-After: 5` (never `500`), and readiness reports not-ready so an orchestrator stops routing to them; requests that arrive while a restart is in progress wait for a connection up to the pool timeout and then succeed.
 
 - Every call to Product and Inventory has `spring.http.clients.connect-timeout` (default `2s`) and
   `read-timeout` (default `5s`); a timeout becomes a `503`. Verified against a real slow HTTP server.

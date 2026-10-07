@@ -12,10 +12,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-mercury-obs}
-# remembered per project: a kept stack keeps its database volume, which fixed the password at first start
-PW_FILE="/tmp/${COMPOSE_PROJECT_NAME}.pw"
-[[ -n ${POSTGRES_PASSWORD:-} ]] || { [[ -s $PW_FILE ]] || (umask 077; openssl rand -hex 12 > "$PW_FILE"); POSTGRES_PASSWORD=$(cat "$PW_FILE"); }
-export POSTGRES_PASSWORD
+eval "$(scripts/lib/platform-env.sh "$COMPOSE_PROJECT_NAME")"
+PW_FILE="/tmp/${COMPOSE_PROJECT_NAME}.env"
 export TRACING_SAMPLING_PROBABILITY=1.0
 GRAFANA_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
 DC="docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile platform"

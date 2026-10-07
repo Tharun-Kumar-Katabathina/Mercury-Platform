@@ -8,7 +8,17 @@ import java.util.UUID;
  * A validated order that has not been saved or reserved yet: authoritative product data
  * (name, sku, price) already snapshotted, total already calculated.
  */
-public record OrderDraft(List<Item> items, BigDecimal totalAmount) {
+public record OrderDraft(List<Item> items, BigDecimal totalAmount, String customerId) {
+
+    /** A draft with no owner (security off, tests). */
+    public OrderDraft(List<Item> items, BigDecimal totalAmount) {
+        this(items, totalAmount, null);
+    }
+
+    public OrderDraft withCustomer(String customerId) {
+        return new OrderDraft(items, totalAmount, customerId);
+    }
+
 
     public record Item(
             UUID productId,

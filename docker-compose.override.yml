@@ -1,11 +1,10 @@
 # Developer conveniences, applied automatically by `docker compose up` (NOT by `-f docker-compose.yml`).
+# Needs the .env that scripts/init-secrets.sh creates: there is no default password.
 # Lets services started from your IDE / `./mvnw spring-boot:run` reach the infrastructure on localhost.
 
 services:
   postgres:
     container_name: mercury-postgres
-    environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mercury}
     ports:
       - "127.0.0.1:5432:5432"
     networks: [data, dev]
@@ -27,16 +26,6 @@ services:
       - "127.0.0.1:6333:6333"
       - "127.0.0.1:6334:6334"
     networks: [data, dev]
-
-  product-service:
-    environment: &dev-password
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mercury}
-  inventory-service:
-    environment: *dev-password
-  order-service:
-    environment: *dev-password
-  notification-service:
-    environment: *dev-password
 
 networks:
   # published ports need a non-internal network

@@ -5,6 +5,9 @@ import com.mercury.order.dto.OrderReservationSnapshot;
 import com.mercury.order.dto.ReservationSnapshot;
 import com.mercury.order.dto.ReserveInventoryRequest;
 import com.mercury.order.exception.InventoryServiceException;
+import com.mercury.order.security.ServiceTokenProvider;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -33,14 +36,33 @@ public class InventoryClient {
     private final RestClient restClient;
     private final DownstreamGuard guard;
 
+    /** Without service authentication (unit tests). */
+    public InventoryClient(RestClient.Builder builder, String inventoryServiceUrl, DownstreamGuard guard) {
+        this(builder, inventoryServiceUrl, guard, null);
+    }
+
+    @Autowired
     public InventoryClient(
             RestClient.Builder builder,
             @Value("${inventory.service.url}") String inventoryServiceUrl,
-            @Qualifier("inventoryGuard") DownstreamGuard guard) {
+            @Qualifier("inventoryGuard") DownstreamGuard guard,
+            ObjectProvider<ServiceTokenProvider> tokens) {
 
         this.guard = guard;
         this.restClient = builder
                 .baseUrl(inventoryServiceUrl)
+                .requestInterceptor((request, body, execution) -> {
+                    // service-to-service authentication: a short-lived SERVICE token from the user-service
+                    ServiceTokenProvider provider = tokens == null ? null : tokens.getIfAvailable();
+                    if (provider != null) {
+                        try {
+                            request.getHeaders().setBearerAuth(provider.token());
+                        } catch (ServiceTokenProvider.UnavailableException e) {
+                            throw new java.io.IOException(e.getMessage(), e);   // surfaces as "service unreachable"
+                        }
+                    }
+                    return execution.execute(request, body);
+                })
                 .defaultStatusHandler(
                         status -> status.isError(),
                         (request, response) -> {

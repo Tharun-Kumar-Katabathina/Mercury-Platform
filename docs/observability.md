@@ -49,6 +49,13 @@ Every service exposes `/actuator/prometheus`; every series is tagged `applicatio
 | `events_published_total`, `events_publish_failed_total`, `outbox_pending` | the transactional outbox (both Order and Inventory) |
 | `http_server_requests_seconds_*` | rate, latency histogram (buckets from 25 ms to 5 s), errors, by `uri`, `method`, `status` |
 
+**Added in later phases:** `product_cache_total{result=hit|miss|error}` (Redis read-through cache), `recommendation_cache_total`, `recommendation_events_consumed_total` / `_failed_total`,
+`recommendation_index_synced_total` / `_failed_total` (vectors pushed to Qdrant), `redis_*` (Redis exporter), `tomcat_threads_busy_threads`.
+
+**Alerts:** 18 rules in `infrastructure/observability/prometheus/alerts.yml` (service down or flapping, 5xx rate, slow requests, orders stuck in recovery, recovery gave up,
+compensation failing, cancellation spike, Kafka lag, dead letters, outbox backlog, PostgreSQL down, pool saturation, deadlocks, cache errors, heap) each with a runbook entry in
+[operations.md](operations.md). They are evaluated by Prometheus (visible under Alerts); routing them to a pager or chat needs an Alertmanager, which is not configured here.
+
 **Infrastructure metrics:** JVM memory, GC pauses, threads, process CPU, Tomcat threads, HikariCP pools
 (`hikaricp_*`), Kafka (`kafka_consumergroup_lag`, topic offsets, brokers), PostgreSQL (`pg_*`), containers
 (`container_*`). Redis panels exist and fill in when Redis is added.
@@ -86,7 +93,7 @@ service that logs it. (Product and Inventory log little per request by design; t
 
 Starts the platform with the overlay and proves, with assertions:
 
-1. all 8 scrape targets are up;
+1. every scrape target is up (the seven services, Kafka, PostgreSQL, Redis, the containers and Prometheus itself);
 2. a **synchronous** order produces one trace spanning Order, Product and Inventory;
 3. `orders.created`, `inventory.reservations` and the HTTP request counter moved;
 4. an **asynchronous** order produces one trace spanning Order, Inventory, Notification and Product across Kafka and the outbox;
@@ -102,6 +109,6 @@ Starts the platform with the overlay and proves, with assertions:
   Per-service CPU and memory come from each service's own JVM metrics.
 - Traces are kept in Jaeger's memory (lost on restart) and sampled at 100 % in the overlay: demo settings.
 - No logs backend (Loki) yet: logs are correlated by trace id but searched with `docker logs` / `kubectl logs`.
-- No alert rules yet (the dashboards show the signals; alerting belongs with the resilience and CI/CD phases).
+- Alert rules exist and are evaluated by Prometheus, but nothing delivers them (no Alertmanager, pager or chat integration).
 - Grafana's default password `admin` is for local use (bound to 127.0.0.1); Phase 15 removes default credentials.
 - Dashboards are regenerated from a script during development but the JSON files are the source of truth.

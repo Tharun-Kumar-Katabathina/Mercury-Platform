@@ -1,0 +1,284 @@
+# Continuous integration and delivery for Mercury.
+#
+#   pull request / push  ->  build + unit tests  ->  real-stack integration tests  ->  security scans
+#                        ->  container build + scan  ->  platform smoke + security + performance smoke
+#   push to main         ->  images pushed to GHCR (tagged with the commit)  ->  deploy to staging (when enabled)
+#
+# Nothing here needs a manual "did we forget a test?" step: the same commands a developer runs locally are the gates,
+# and a failed gate blocks the merge (mark every job below as a required status check on the protected branch).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: "21"
+
+jobs:
+  # ------------------------------------------------------------------------------------------------ 1. build and unit tests
+  unit-tests:
+    name: unit tests (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [product-service, inventory-service, order-service, notification-service, user-service, api-gateway, recommendation-service]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      - name: Build and test
+        working-directory: services/${{ matrix.service }}
+        # the order service's real-stack suite runs in its own job below; everything else (including the
+        # Testcontainers Kafka/Redis/Qdrant tests, which the runner's Docker supports) runs here
+        run: ./mvnw -B -ntp verify ${{ matrix.service == 'order-service' && '-Dtest=!*IntegrationTests' || '' }}
+      - name: Keep the test reports when something fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-${{ matrix.service }}
+          path: services/${{ matrix.service }}/target/surefire-reports
+          retention-days: 7
+
+  # ------------------------------------------------------------------------------------------------ 2. the real stack
+  integration-tests:
+    name: real-stack integration tests
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      - name: Order -> Product -> Inventory -> PostgreSQL -> Kafka -> Notification, with failure injection
+        working-directory: services/order-service
+        run: ./mvnw -B -ntp test -Dtest='*IntegrationTests,InventoryEventKafkaTests'
+      - name: Keep the logs of the services the tests started
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-logs
+          path: |
+            services/order-service/target/it-logs
+            services/order-service/target/surefire-reports
+          retention-days: 7
+
+  # ------------------------------------------------------------------------------------------------ 3. static checks
+  static-checks:
+    name: static checks (scripts, compose, kubernetes, workflows)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell scripts
+        run: |
+          sudo apt-get -qq install -y shellcheck
+          shellcheck -S warning scripts/*.sh scripts/lib/*.sh
+      - name: Python harnesses compile
+        run: python3 -m py_compile scripts/chaos/*.py scripts/perf/*.py scripts/security/*.py
+      - name: Docker Compose files are valid
+        run: |
+          export POSTGRES_PASSWORD=ci
+          docker compose -f docker-compose.yml --profile platform config -q
+          docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile platform config -q
+          docker compose -f docker-compose.yml -f docker-compose.chaos.yml --profile platform config -q
+          docker compose -f docker-compose.yml -f docker-compose.observability.yml -f docker-compose.perf.yml --profile platform config -q
+      - name: Kubernetes manifests render and match the schemas
+        run: |
+          scripts/k8s-create-secrets.sh
+          for overlay in local production; do
+            kubectl kustomize "infrastructure/kubernetes/overlays/$overlay" > "/tmp/$overlay.yaml"
+          done
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz -C /tmp
+          /tmp/kubeconform -strict -summary -kubernetes-version 1.31.0 /tmp/local.yaml /tmp/production.yaml
+      - name: Workflows are valid
+        uses: docker://rhysd/actionlint:1.7.7
+        with:
+          args: -color
+
+  # ------------------------------------------------------------------------------------------------ 4. security scans
+  security-scan:
+    name: dependency, secret and configuration scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                       # the secret scan reads the history, not just the tip
+      - name: Secrets in the code or its history
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Vulnerable dependencies and insecure configuration (Trivy filesystem scan)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: sarif
+          output: trivy-fs.sarif
+      - name: Show the findings in the repository's security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+
+  # ------------------------------------------------------------------------------------------------ 5. container images
+  images:
+    name: image (${{ matrix.service }})
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { service: product-service, port: 8081 }
+          - { service: inventory-service, port: 8082 }
+          - { service: order-service, port: 8083 }
+          - { service: notification-service, port: 8084 }
+          - { service: user-service, port: 8085 }
+          - { service: recommendation-service, port: 8086 }
+          - { service: api-gateway, port: 8090 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (and cache) the image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          file: infrastructure/docker/Dockerfile.service
+          build-args: |
+            SERVICE=${{ matrix.service }}
+            PORT=${{ matrix.port }}
+          load: true
+          tags: mercury/${{ matrix.service }}:ci
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - name: Scan the image (operating system and libraries)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: mercury/${{ matrix.service }}:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: sarif
+          output: trivy-image.sarif
+      - name: Show the findings in the repository's security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: image-${{ matrix.service }}
+      - name: Log in to the registry (main only)
+        if: github.event_name == 'push' && github.ref_name == 'main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish (main only), tagged with the commit
+        if: github.event_name == 'push' && github.ref_name == 'main'
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mercury-${{ matrix.service }}"
+          docker tag "mercury/${{ matrix.service }}:ci" "$image:${GITHUB_SHA}"
+          docker tag "mercury/${{ matrix.service }}:ci" "$image:main"
+          docker push "$image:${GITHUB_SHA}"
+          docker push "$image:main"
+
+  # ------------------------------------------------------------------------------------------------ 6. the whole platform
+  platform:
+    name: platform smoke, security and performance
+    needs: [integration-tests, images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Generate throw-away secrets
+        run: scripts/init-secrets.sh
+      - name: Start the platform
+        run: docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile platform up -d --build --wait --wait-timeout 600
+      - name: Smoke test (create a product, order it, replay it, see the notification)
+        run: set -a && . ./.env && set +a && scripts/smoke-test.sh
+      - name: Security tests (tokens, roles, injection, abuse) through the gateway
+        run: set -a && . ./.env && set +a && python3 scripts/security/run.py
+      - name: Performance smoke (100 users, hard thresholds)
+        run: |
+          set -a && . ./.env && set +a
+          scripts/perf/smoke.sh
+      - name: Logs and metrics when something failed
+        if: failure()
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile platform ps
+          docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile platform logs --tail 200
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile platform down -v
+
+  # ------------------------------------------------------------------------------------------------ 7. delivery
+  deploy-staging:
+    name: deploy to staging
+    if: github.event_name == 'push' && github.ref_name == 'main' && vars.DEPLOY_ENABLED == 'true'
+    needs: [platform, security-scan, static-checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging                      # protection rules (reviewers, wait timer) are configured on this environment
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cluster access
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.STAGING_KUBECONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+      - name: Render the production overlay with this commit's images
+        run: |
+          cd infrastructure/kubernetes/overlays/production
+          for svc in product inventory order notification user recommendation; do
+            kustomize edit set image "mercury/${svc}-service=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mercury-${svc}-service:${GITHUB_SHA}"
+          done
+          kustomize edit set image "mercury/api-gateway=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mercury-api-gateway:${GITHUB_SHA}"
+      - name: Create the secrets (first deploy only; later deploys keep them)
+        run: scripts/k8s-create-secrets.sh
+      - name: Apply and wait for every rollout
+        run: |
+          kubectl apply -k infrastructure/kubernetes/overlays/production
+          for d in product-service inventory-service order-service notification-service user-service recommendation-service api-gateway; do
+            kubectl -n mercury rollout status "deployment/$d" --timeout=300s
+          done
+      - name: Roll back if the rollout failed
+        if: failure()
+        run: |
+          for d in product-service inventory-service order-service notification-service user-service recommendation-service api-gateway; do
+            kubectl -n mercury rollout undo "deployment/$d" || true
+          done

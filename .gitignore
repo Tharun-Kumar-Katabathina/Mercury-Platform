@@ -14,3 +14,7 @@ __pycache__/
 
 # Kubernetes secrets generated locally
 infrastructure/kubernetes/**/secrets.env
+
+# JWT signing keys and other generated secrets
+.secrets/
+infrastructure/kubernetes/**/*.pem

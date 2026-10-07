@@ -1,0 +1,24 @@
+# Failure-injection settings for scripts/chaos (Phase 13): the same platform, with recovery, outbox and the
+# asynchronous waiting deadline tuned so that failures are detected and repaired in seconds, not minutes.
+# Never use these values in production.
+services:
+  order-service:
+    environment:
+      ORDER_RECOVERY_INTERVAL: 2s
+      ORDER_RECOVERY_STALE_AFTER: 6s
+      ORDER_RECOVERY_LEASE: 6s
+      ORDER_RECOVERY_INITIAL_BACKOFF: 1s
+      ORDER_RECOVERY_MAX_BACKOFF: 5s
+      ORDER_RECOVERY_MAX_ATTEMPTS: "60"
+      ORDER_RESERVATION_ASYNC_DEADLINE: ${ORDER_RESERVATION_ASYNC_DEADLINE:-12s}
+      ORDER_OUTBOX_INTERVAL: 500ms
+      ORDER_OUTBOX_INITIAL_BACKOFF: 500ms
+      ORDER_OUTBOX_MAX_BACKOFF: 3s
+      ORDER_IDEMPOTENCY_WAIT_TIMEOUT: 10s
+  inventory-service:
+    environment:
+      INVENTORY_OUTBOX_INTERVAL: 500ms
+      INVENTORY_OUTBOX_INITIAL_BACKOFF: 500ms
+      INVENTORY_OUTBOX_MAX_BACKOFF: 3s
+      INVENTORY_RETRY_INITIAL_INTERVAL: 300ms
+      INVENTORY_RETRY_MAX_INTERVAL: 2s

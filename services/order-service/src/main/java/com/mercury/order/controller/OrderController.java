@@ -2,7 +2,9 @@ package com.mercury.order.controller;
 
 import com.mercury.order.dto.CreateOrderRequest;
 import com.mercury.order.dto.OrderResponse;
+import com.mercury.order.security.Caller;
 import com.mercury.order.service.OrderCreationResult;
+import org.springframework.security.core.Authentication;
 import com.mercury.order.service.OrderService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -34,9 +36,10 @@ public class OrderController {
     public ResponseEntity<OrderResponse> createOrder(
             // optional here so a missing key gets Mercury's own MISSING_IDEMPOTENCY_KEY error
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            @Valid @RequestBody CreateOrderRequest request) {
+            @Valid @RequestBody CreateOrderRequest request,
+            Authentication authentication) {
 
-        OrderCreationResult result = orderService.createOrder(idempotencyKey, request);
+        OrderCreationResult result = orderService.createOrder(idempotencyKey, request, Caller.from(authentication));
 
         ResponseEntity.BodyBuilder response = ResponseEntity.status(switch (result.kind()) {
             case CREATED -> HttpStatus.CREATED;
@@ -53,8 +56,8 @@ public class OrderController {
     }
 
     @GetMapping("/{orderId}")
-    public OrderResponse getOrder(@PathVariable UUID orderId) {
+    public OrderResponse getOrder(@PathVariable UUID orderId, Authentication authentication) {
 
-        return orderService.getOrder(orderId);
+        return orderService.getOrder(orderId, Caller.from(authentication));
     }
 }

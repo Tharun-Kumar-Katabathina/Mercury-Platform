@@ -8,6 +8,9 @@ images:
   - { name: mercury/inventory-service,    newName: ghcr.io/tharun-kumar-katabathina/mercury-inventory-service,    newTag: dev }
   - { name: mercury/order-service,        newName: ghcr.io/tharun-kumar-katabathina/mercury-order-service,        newTag: dev }
   - { name: mercury/notification-service, newName: ghcr.io/tharun-kumar-katabathina/mercury-notification-service, newTag: dev }
+  - { name: mercury/user-service,         newName: ghcr.io/tharun-kumar-katabathina/mercury-user-service,         newTag: dev }
+  - { name: mercury/api-gateway,          newName: ghcr.io/tharun-kumar-katabathina/mercury-api-gateway,          newTag: dev }
+  - { name: mercury/recommendation-service, newName: ghcr.io/tharun-kumar-katabathina/mercury-recommendation-service, newTag: dev }
 patches:
   - target: { kind: HorizontalPodAutoscaler, name: order-service }
     patch: |-

@@ -131,6 +131,16 @@ Docker VM has about 4 GB of RAM, too little for a cluster plus the platform). HP
 enforcement need a real cluster with metrics-server and a policy-aware CNI. This is the first thing to run once a
 cluster is available (`kind` is enough).
 
+## 7b. Phases 12-17 additions
+
+- **Secrets.** `scripts/init-secrets.sh` generates `.env` (random database, admin and service-to-service secrets) and the JWT key pair under `.secrets/`
+  (both git-ignored); nothing has a default. Compose mounts the keys as secrets: the private key only into the user-service. Kubernetes uses the same
+  values through `scripts/k8s-create-secrets.sh` (`secrets.env`, `jwt-*.pem`, both git-ignored).
+- **New services**: `user-service` (8085), `recommendation-service` (8086), `api-gateway` (8090), all built from the same Dockerfile, with the same probes,
+  limits and hardening; plus Redis. In Kubernetes only the gateway is a `LoadBalancer`; a NetworkPolicy lets it, and only it, take traffic from outside the namespace.
+- Observability overlay: `docker-compose.observability.yml` ([observability.md](observability.md)). Chaos overlay and harness: [resilience.md](resilience.md).
+  Performance overlay (nginx load balancer, scaling): [performance.md](performance.md).
+
 ## 8. Known limitations
 
 - Single-node Kafka and single-instance Postgres/Qdrant: appropriate for development and staging, not an HA

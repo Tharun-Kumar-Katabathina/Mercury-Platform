@@ -91,7 +91,7 @@ public class OrderTransactions {
     @Transactional
     public UUID createPending(String idempotencyKey, String requestHash, OrderDraft draft) {
 
-        Order order = Order.pending(draft.totalAmount());
+        Order order = Order.pending(draft.totalAmount()).ownedBy(draft.customerId());
         for (OrderDraft.Item item : draft.items()) {
             order.addItem(new OrderItem(
                     item.productId(), item.productName(), item.sku(),
@@ -112,7 +112,7 @@ public class OrderTransactions {
                         .map(i -> new OrderCreatedEvent.Item(
                                 i.productId(), i.quantity(), i.productName(), i.sku(), i.unitPrice()))
                         .toList(),
-                draft.totalAmount()));
+                draft.totalAmount(), draft.customerId()));
 
         return order.getId();
     }
@@ -208,7 +208,7 @@ public class OrderTransactions {
     public UUID createPendingAsync(
             String idempotencyKey, String requestHash, OrderDraft draft, java.time.Duration deadline) {
 
-        Order order = Order.pending(draft.totalAmount(), ReservationMode.ASYNC);
+        Order order = Order.pending(draft.totalAmount(), ReservationMode.ASYNC).ownedBy(draft.customerId());
         for (OrderDraft.Item item : draft.items()) {
             order.addItem(new OrderItem(
                     item.productId(), item.productName(), item.sku(),
@@ -225,7 +225,7 @@ public class OrderTransactions {
                         .map(i -> new OrderCreatedEvent.Item(
                                 i.productId(), i.quantity(), i.productName(), i.sku(), i.unitPrice()))
                         .toList(),
-                draft.totalAmount()));
+                draft.totalAmount(), draft.customerId()));
         outbox.append(InventoryReservationRequestedEvent.of(order.getId(), now(),
                 draft.items().stream()
                         .map(i -> new InventoryReservationRequestedEvent.Item(i.productId(), i.quantity()))

@@ -177,6 +177,8 @@ final class RealInventoryStack {
                 .redirectErrorStream(true)
                 .redirectOutput(log.toFile());
         builder.environment().put("SERVER_PORT", String.valueOf(inventoryPort));
+        // these tests are about stock and idempotency, not authentication (which has its own tests and its own black-box suite)
+        builder.environment().put("SECURITY_ENABLED", "false");
         builder.environment().put("INVENTORY_DB_URL", inventoryJdbcUrl());
         builder.environment().put("POSTGRES_USER", dbUsername());
         builder.environment().put("POSTGRES_PASSWORD", dbPassword());

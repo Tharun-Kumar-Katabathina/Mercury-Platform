@@ -39,10 +39,13 @@ public class ProductController {
         return productService.getProduct(id);
     }
 
+    /** One page of products, oldest first. `size` defaults to 50 and is capped at 200: the list is never unbounded. */
     @GetMapping
-    public List<ProductResponse> getAllProducts() {
+    public List<ProductResponse> getAllProducts(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size) {
 
-        return productService.getAllProducts();
+        return productService.getAllProducts(page, size);
     }
 
     @PutMapping("/{id}")

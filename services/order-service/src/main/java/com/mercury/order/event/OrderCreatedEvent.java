@@ -11,7 +11,9 @@ public record OrderCreatedEvent(
         Instant occurredAt,
         UUID orderId,
         List<Item> items,
-        BigDecimal totalAmount) implements OrderEvent {
+        BigDecimal totalAmount,
+        /** who placed the order (the token subject); null when security is off. Used by the recommendation service. */
+        String customerId) implements OrderEvent {
 
     public static final String TYPE = "OrderCreated";
 
@@ -19,6 +21,10 @@ public record OrderCreatedEvent(
     }
 
     public static OrderCreatedEvent of(UUID orderId, Instant occurredAt, List<Item> items, BigDecimal total) {
-        return new OrderCreatedEvent(UUID.randomUUID(), TYPE, occurredAt, orderId, items, total);
+        return of(orderId, occurredAt, items, total, null);
+    }
+
+    public static OrderCreatedEvent of(UUID orderId, Instant occurredAt, List<Item> items, BigDecimal total, String customerId) {
+        return new OrderCreatedEvent(UUID.randomUUID(), TYPE, occurredAt, orderId, items, total, customerId);
     }
 }

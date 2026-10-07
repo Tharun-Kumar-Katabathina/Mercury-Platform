@@ -1,0 +1,154 @@
+# Alert rules: each one names a failure the platform is designed to survive, and what a person should do when it lasts.
+# Thresholds are starting points for a small deployment; tune them against real traffic.
+groups:
+  - name: availability
+    rules:
+      - alert: ServiceDown
+        expr: up{job="mercury-services"} == 0
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.service }} is not answering its metrics endpoint"
+          runbook: "docs/operations.md#service-down"
+      - alert: ServiceFlapping
+        expr: changes(process_start_time_seconds{job="mercury-services"}[15m]) > 2
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: "{{ $labels.service }} restarted {{ $value }} times in 15 minutes (crash loop or out-of-memory kill)"
+          runbook: "docs/operations.md#service-down"
+
+  - name: api
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum by (application) (rate(http_server_requests_seconds_count{status=~"5.."}[5m]))
+            / clamp_min(sum by (application) (rate(http_server_requests_seconds_count[5m])), 1e-9) > 0.05
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.application }}: more than 5% of requests fail with 5xx"
+          runbook: "docs/operations.md#high-error-rate"
+      - alert: SlowRequests
+        expr: |
+          histogram_quantile(0.95, sum by (le, application) (rate(http_server_requests_seconds_bucket{uri!~"/actuator.*"}[5m]))) > 1
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "{{ $labels.application }}: p95 latency above 1 s"
+          runbook: "docs/operations.md#slow-requests"
+
+  - name: orders
+    rules:
+      - alert: OrdersStuckInRecovery
+        expr: max(orders_recovery_lag_seconds) > 120
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "A saga has waited more than 2 minutes for recovery ({{ $value }}s): the recovery worker is not keeping up or is down"
+          runbook: "docs/operations.md#orders-stuck"
+      - alert: RecoveryGaveUp
+        expr: max(orders_recovery_exhausted) > 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $value }} order(s) are RECOVERY_FAILED and need a person (no automatic path is left)"
+          runbook: "docs/operations.md#recovery-failed"
+      - alert: CompensationFailing
+        expr: increase(saga_compensation_failure_total[10m]) > 5
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Stock releases are failing: reserved stock may be stranded until Inventory answers"
+          runbook: "docs/operations.md#orders-stuck"
+      - alert: OrderCancellationsSpike
+        expr: |
+          sum(rate(orders_cancelled_total[10m])) / clamp_min(sum(rate(orders_created_total[10m])), 1e-9) > 0.3
+          and sum(rate(orders_created_total[10m])) > 0.05
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "More than 30% of orders are being cancelled (out of stock, or a dependency is failing)"
+          runbook: "docs/operations.md#cancellation-spike"
+      - alert: LateReservationsReleased
+        expr: increase(order_inventory_late_reservations_total[15m]) > 0
+        for: 0m
+        labels: { severity: info }
+        annotations:
+          summary: "Inventory reserved for orders that had already timed out; the stock is being given back (consider a longer waiting deadline)"
+          runbook: "docs/operations.md#late-reservations"
+
+  - name: messaging
+    rules:
+      - alert: KafkaConsumerLag
+        expr: sum by (consumergroup, topic) (kafka_consumergroup_lag) > 500
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Consumer group {{ $labels.consumergroup }} is {{ $value }} messages behind on {{ $labels.topic }}"
+          runbook: "docs/operations.md#kafka-lag"
+      - alert: DeadLetters
+        expr: sum by (topic) (kafka_topic_partition_current_offset{topic=~".*dlq"}) > 0
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Messages are in the dead-letter topic {{ $labels.topic }} (they failed repeatedly or were malformed)"
+          runbook: "docs/operations.md#dead-letters"
+      - alert: OutboxBacklog
+        expr: sum by (application) (outbox_pending) > 200
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: "{{ $labels.application }} has {{ $value }} events waiting in its outbox: Kafka is unreachable or the publisher is stuck"
+          runbook: "docs/operations.md#outbox-backlog"
+
+  - name: data
+    rules:
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: "PostgreSQL is not reachable"
+          runbook: "docs/operations.md#postgres-down"
+      - alert: ConnectionPoolSaturated
+        expr: max by (application) (hikaricp_connections_pending) > 5
+        for: 3m
+        labels: { severity: ticket }
+        annotations:
+          summary: "{{ $labels.application }}: threads are waiting for a database connection (pool too small or queries too slow)"
+          runbook: "docs/operations.md#pool-saturated"
+      - alert: Deadlocks
+        expr: increase(pg_stat_database_deadlocks{datname=~"mercury_.*"}[10m]) > 0
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Deadlocks in {{ $labels.datname }}"
+          runbook: "docs/operations.md#deadlocks"
+      - alert: CacheErrors
+        expr: sum by (application) (rate(product_cache_total{result="error"}[5m])) > 0.1 or sum(rate(recommendation_cache_total{result="error"}[5m])) > 0.1
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Redis errors: reads are being served from the database (slower, not wrong)"
+          runbook: "docs/operations.md#cache-errors"
+
+  - name: inventory
+    rules:
+      - alert: OversellAttemptsRising
+        expr: sum(increase(inventory_oversell_attempts_total[10m])) > 100
+        for: 0m
+        labels: { severity: info }
+        annotations:
+          summary: "Many requests for more stock than exists (all refused, nothing oversold): popular item out of stock, or abuse"
+          runbook: "docs/operations.md#oversell-attempts"
+
+  - name: resources
+    rules:
+      - alert: JvmHeapNearLimit
+        expr: sum by (application) (jvm_memory_used_bytes{area="heap"}) / sum by (application) (jvm_memory_max_bytes{area="heap"}) > 0.9
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "{{ $labels.application }}: heap above 90% for 10 minutes"
+          runbook: "docs/operations.md#memory"

@@ -11,23 +11,34 @@ import com.mercury.product.exception.ProductNotFoundException;
 import com.mercury.product.model.Product;
 import com.mercury.product.repository.ProductRepository;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
 public class ProductService {
 
+    public static final int DEFAULT_PAGE_SIZE = 50;
+    public static final int MAX_PAGE_SIZE = 200;
+
     private final ProductRepository productRepository;
     private final InventoryClient inventoryClient;
+    private final ProductCache cache;
 
     public ProductService(
             ProductRepository productRepository,
-            InventoryClient inventoryClient) {
+            InventoryClient inventoryClient,
+            ProductCache cache) {
         this.productRepository = productRepository;
         this.inventoryClient = inventoryClient;
+        this.cache = cache;
     }
 
     @Transactional
@@ -52,19 +63,32 @@ public class ProductService {
         }
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * Cache first (when enabled), then the database. Not @Transactional on purpose: a cache hit needs no database
+     * connection at all, and the repository's own read-only transaction covers the miss.
+     */
     public ProductResponse getProduct(UUID id) {
+
+        Optional<ProductResponse> cached = cache.get(id);
+        if (cached.isPresent()) {
+            return cached.get();
+        }
 
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ProductNotFoundException(id));
 
-        return ProductResponse.from(product);
+        ProductResponse response = ProductResponse.from(product);
+        cache.put(response);
+        return response;
     }
 
+    /** One page, oldest first (stable order). The list is never unbounded: size is capped at {@link #MAX_PAGE_SIZE}. */
     @Transactional(readOnly = true)
-    public List<ProductResponse> getAllProducts() {
+    public List<ProductResponse> getAllProducts(int page, int size) {
 
-        return productRepository.findAll()
+        int boundedSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        return productRepository.findAll(PageRequest.of(
+                        Math.max(page, 0), boundedSize, Sort.by("createdAt").ascending().and(Sort.by("id"))))
                 .stream()
                 .map(ProductResponse::from)
                 .toList();
@@ -83,6 +107,7 @@ public class ProductService {
         existingProduct.setQuantity(request.quantity());
 
         Product updatedProduct = productRepository.save(existingProduct);
+        evictAfterCommit(id);
 
         return ProductResponse.from(updatedProduct);
     }
@@ -94,6 +119,27 @@ public class ProductService {
                 .orElseThrow(() -> new ProductNotFoundException(id));
 
         productRepository.delete(existingProduct);
+        evictAfterCommit(id);
+    }
+
+    /**
+     * Evicting before the commit would let a concurrent reader re-cache the old row; after the commit the
+     * next read loads the new one. (Redis being down is harmless: the TTL bounds staleness.)
+     */
+    private void evictAfterCommit(UUID id) {
+        if (!cache.enabled()) {
+            return;
+        }
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    cache.evict(id);
+                }
+            });
+        } else {
+            cache.evict(id);
+        }
     }
 
     /**

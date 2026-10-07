@@ -1,0 +1,13 @@
+# Keeps dependencies, base images and the pipeline's own actions current; each update arrives as a pull request
+# that has to pass the full pipeline before it can merge.
+version: 2
+updates:
+  - { package-ecosystem: maven, directory: /services/product-service, schedule: { interval: weekly } }
+  - { package-ecosystem: maven, directory: /services/inventory-service, schedule: { interval: weekly } }
+  - { package-ecosystem: maven, directory: /services/order-service, schedule: { interval: weekly } }
+  - { package-ecosystem: maven, directory: /services/notification-service, schedule: { interval: weekly } }
+  - { package-ecosystem: maven, directory: /services/user-service, schedule: { interval: weekly } }
+  - { package-ecosystem: maven, directory: /services/recommendation-service, schedule: { interval: weekly } }
+  - { package-ecosystem: maven, directory: /services/api-gateway, schedule: { interval: weekly } }
+  - { package-ecosystem: docker, directory: /infrastructure/docker, schedule: { interval: weekly } }
+  - { package-ecosystem: github-actions, directory: /, schedule: { interval: weekly } }

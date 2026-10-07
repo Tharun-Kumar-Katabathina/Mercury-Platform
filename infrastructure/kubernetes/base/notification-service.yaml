@@ -44,6 +44,9 @@ spec:
             - { name: SERVER_PORT, value: "8084" }
             - { name: KAFKA_BOOTSTRAP_SERVERS, valueFrom: { configMapKeyRef: { name: mercury-config, key: KAFKA_BOOTSTRAP_SERVERS } } }
             - { name: SHUTDOWN_TIMEOUT, value: 25s }
+            - { name: JWT_PUBLIC_KEY_FILE, value: /run/secrets/jwt/jwt-public.pem }
+            - { name: USER_SERVICE_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: USER_SERVICE_URL } } }
+            - { name: SERVICE_CLIENT_ID, value: notification-service }
             - { name: POSTGRES_USER, valueFrom: { secretKeyRef: { name: mercury-secrets, key: POSTGRES_USER } } }
             - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: mercury-secrets, key: POSTGRES_PASSWORD } } }
             - name: NOTIFICATION_DB_URL
@@ -78,9 +81,12 @@ spec:
             capabilities: { drop: [ALL] }
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
+            - { name: jwt, mountPath: /run/secrets/jwt, readOnly: true }
       volumes:
         - name: tmp
           emptyDir: { medium: Memory, sizeLimit: 64Mi }
+        - name: jwt
+          secret: { secretName: mercury-jwt-keys, items: [ { key: jwt-public.pem, path: jwt-public.pem } ] }
 ---
 apiVersion: v1
 kind: Service

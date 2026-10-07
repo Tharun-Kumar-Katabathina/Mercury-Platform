@@ -26,6 +26,7 @@ spec:
         - { port: 9092 }
         - { port: 6333 }
         - { port: 6334 }
+        - { port: 6379 }
     - from:
         - podSelector:
             matchLabels: { mercury/tier: data }     # Kafka's controller talks to itself
@@ -51,6 +52,7 @@ spec:
         - { port: 8082 }
         - { port: 8083 }
         - { port: 8084 }
+        - { port: 8085 }
     - from:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: ingress-nginx }
@@ -61,3 +63,16 @@ spec:
         - { port: 8082 }
         - { port: 8083 }
         - { port: 8084 }
+---
+# the gateway is the one pod that accepts traffic from outside the namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-from-anywhere
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: api-gateway }
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { port: 8090 }

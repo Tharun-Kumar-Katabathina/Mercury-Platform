@@ -14,6 +14,7 @@ import com.mercury.order.model.ClaimStatus;
 import com.mercury.order.model.OrderStatus;
 import com.mercury.order.model.ReservationMode;
 import com.mercury.order.repository.OrderRepository;
+import com.mercury.order.security.Caller;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -93,13 +94,49 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public OrderResponse getOrder(UUID orderId) {
+        return getOrder(orderId, Caller.ANONYMOUS);
+    }
 
-        return orderRepository.findWithItemsById(orderId)
+    /**
+     * Someone else's order is reported as "not found", exactly like an order that does not exist, so ids cannot be
+     * probed. Orders without an owner (created before authentication existed) are visible only to privileged callers.
+     */
+    @Transactional(readOnly = true)
+    public OrderResponse getOrder(UUID orderId, Caller caller) {
+
+        OrderResponse order = orderRepository.findWithItemsById(orderId)
                 .map(OrderResponse::from)
                 .orElseThrow(() -> new OrderNotFoundException(orderId));
+        if (!caller.privileged()) {
+            String owner = orderRepository.findCustomerIdById(orderId).orElse(null);
+            if (owner == null || !owner.equals(caller.customerId())) {
+                throw new OrderNotFoundException(orderId);
+            }
+        }
+        return order;
     }
 
     public OrderCreationResult createOrder(String idempotencyKey, CreateOrderRequest request) {
+        return createOrder(idempotencyKey, request, Caller.ANONYMOUS);
+    }
+
+    /**
+     * The client's Idempotency-Key is only unique per customer: two customers may pick the same key, and one must
+     * never be handed the other's order. With authentication the claim is stored under a hash of customer + key.
+     */
+    public OrderCreationResult createOrder(String clientKey, CreateOrderRequest request, Caller caller) {
+
+        if (clientKey == null || clientKey.isBlank()) {
+            throw new MissingIdempotencyKeyException();
+        }
+        if (clientKey.length() > 255) {
+            throw new InvalidOrderException("Idempotency-Key must be at most 255 characters");
+        }
+        String idempotencyKey = caller.customerId() == null ? clientKey : sha256(caller.customerId() + ":" + clientKey);
+        return createOrder(idempotencyKey, request, caller.customerId());
+    }
+
+    private OrderCreationResult createOrder(String idempotencyKey, CreateOrderRequest request, String customerId) {
 
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new MissingIdempotencyKeyException();
@@ -123,7 +160,7 @@ public class OrderService {
                 throw new OrderConflictException(
                         "Another request with this Idempotency-Key is being processed; retry shortly");
             }
-            return createOrExisting(idempotencyKey, items, requestHash);
+            return createOrExisting(idempotencyKey, items, requestHash, customerId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while waiting for an in-flight order", e);
@@ -136,7 +173,7 @@ public class OrderService {
     }
 
     private OrderCreationResult createOrExisting(
-            String idempotencyKey, List<CreateOrderItemRequest> items, String requestHash) {
+            String idempotencyKey, List<CreateOrderItemRequest> items, String requestHash, String customerId) {
 
         for (int round = 0; round < MAX_ROUNDS; round++) {
 
@@ -148,7 +185,7 @@ public class OrderService {
             }
 
             // read-only: nothing is saved or reserved until every product is known to be valid
-            OrderDraft draft = planner.draft(items);
+            OrderDraft draft = planner.draft(items).withCustomer(customerId);
 
             boolean async = reservation.mode() == ReservationMode.ASYNC;
 

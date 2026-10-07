@@ -12,6 +12,13 @@ data:
   PRODUCT_SERVICE_URL: http://product-service:8081
   INVENTORY_SERVICE_URL: http://inventory-service:8082
   ORDER_RESERVATION_MODE: SYNC
+  USER_DB_URL: jdbc:postgresql://postgres:5432/mercury_user
+  USER_SERVICE_URL: http://user-service:8085
+  ORDER_SERVICE_URL: http://order-service:8083
+  NOTIFICATION_SERVICE_URL: http://notification-service:8084
+  CORS_ALLOWED_ORIGINS: ""
+  REDIS_HOST: redis
+  PRODUCT_CACHE_ENABLED: "true"
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -21,6 +28,6 @@ data:
   10-init-databases.sh: |
     #!/bin/bash
     set -euo pipefail
-    for db in mercury_product mercury_inventory mercury_order mercury_notification mercury_recommendation; do
+    for db in mercury_product mercury_inventory mercury_order mercury_notification mercury_recommendation mercury_user; do
       psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres -c "CREATE DATABASE $db OWNER $POSTGRES_USER"
     done

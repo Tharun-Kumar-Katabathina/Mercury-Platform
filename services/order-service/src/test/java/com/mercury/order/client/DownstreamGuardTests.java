@@ -20,7 +20,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class DownstreamGuardTests {
 
     private static ResilienceProperties.Downstream settings(int minimumCalls, Duration openFor, int maxConcurrent) {
-        return new ResilienceProperties.Downstream(50f, Math.max(10, minimumCalls), minimumCalls, openFor, 2, maxConcurrent, Duration.ZERO);
+        return new ResilienceProperties.Downstream(50f, Math.max(10, minimumCalls), minimumCalls, openFor, 2, maxConcurrent, Duration.ZERO,
+                ResilienceProperties.Downstream.WindowType.COUNT_BASED);
     }
 
     private static DownstreamGuard guard(int minimumCalls, Duration openFor, int maxConcurrent) {
@@ -147,11 +148,37 @@ class DownstreamGuardTests {
     @Test
     void refusesAMinimumCallCountLargerThanTheWindowInsteadOfSilentlyCappingIt() {
         ResilienceProperties.Downstream contradictory = new ResilienceProperties.Downstream(
-                50f, 20, 1000, Duration.ofSeconds(10), 3, 25, Duration.ZERO);
+                50f, 20, 1000, Duration.ofSeconds(10), 3, 25, Duration.ZERO,
+                ResilienceProperties.Downstream.WindowType.COUNT_BASED);
 
         assertThatThrownBy(() -> DownstreamGuard.create("inventory", contradictory, new SimpleMeterRegistry()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("minimum-calls")
                 .hasMessageContaining("sliding-window-size");
+    }
+
+    @Test
+    void aCountBasedWindowKeepsOldFailuresAfterRecoveryButATimeBasedOneForgetsThem() throws Exception {
+        // five failures during an outage, then five successes after the service came back: ten calls in all
+        DownstreamGuard counted = DownstreamGuard.create("counted", new ResilienceProperties.Downstream(
+                50f, 20, 10, Duration.ofSeconds(10), 2, 25, Duration.ZERO,
+                ResilienceProperties.Downstream.WindowType.COUNT_BASED), new SimpleMeterRegistry());
+        DownstreamGuard timed = DownstreamGuard.create("timed", new ResilienceProperties.Downstream(
+                50f, 2, 10, Duration.ofSeconds(10), 2, 25, Duration.ZERO,
+                ResilienceProperties.Downstream.WindowType.TIME_BASED), new SimpleMeterRegistry());
+        for (DownstreamGuard guard : new DownstreamGuard[]{counted, timed}) {
+            for (int i = 0; i < 5; i++) {
+                fail(guard, HttpStatus.SERVICE_UNAVAILABLE);
+            }
+        }
+        Thread.sleep(2_600);                                   // longer than the time-based window
+        for (DownstreamGuard guard : new DownstreamGuard[]{counted, timed}) {
+            for (int i = 0; i < 5; i++) {
+                guard.execute(() -> "ok", DownstreamGuardTests::rejected);
+            }
+        }
+
+        assertThat(counted.state()).isEqualTo(CircuitBreaker.State.OPEN);     // 5 of the last 10 calls failed: tripped on a healthy service
+        assertThat(timed.state()).isEqualTo(CircuitBreaker.State.CLOSED);     // the outage has aged out of the window
     }
 }

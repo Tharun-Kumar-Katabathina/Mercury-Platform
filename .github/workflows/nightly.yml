@@ -1,0 +1,47 @@
+# The long-running proofs, once a night (and on demand): the failure matrix and the load test.
+# They take far too long for every pull request, and they are what back the platform's resilience and performance claims.
+name: Nightly resilience and performance
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chaos:
+    name: failure matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - run: scripts/init-secrets.sh
+      - name: Inject the failures and check the invariants
+        run: set -a && . ./.env && set +a && python3 scripts/chaos/run.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: failure-matrix
+          path: docs/failure-matrix.md
+
+  performance:
+    name: baseline vs optimized
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - run: scripts/init-secrets.sh
+      - name: Baseline
+        run: set -a && . ./.env && set +a && python3 scripts/perf/run.py --profile baseline --steps 100,500,1000
+      - name: Optimized
+        run: set -a && . ./.env && set +a && python3 scripts/perf/run.py --profile optimized --steps 100,500,1000
+      - run: python3 scripts/perf/compare.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance
+          path: docs/performance-results

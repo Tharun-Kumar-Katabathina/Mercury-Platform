@@ -8,10 +8,13 @@ resources:
   - postgres.yaml
   - kafka.yaml
   - qdrant.yaml
+  - redis.yaml
   - product-service.yaml
   - inventory-service.yaml
   - order-service.yaml
   - notification-service.yaml
+  - user-service.yaml
+  - api-gateway.yaml
   - networkpolicy.yaml
 
 # Credentials are never committed. Create secrets.env from secrets.env.example, or run
@@ -20,5 +23,10 @@ secretGenerator:
   - name: mercury-secrets
     envs:
       - secrets.env
+  # the RS256 key pair (user-service signs, everyone else verifies): copied next to this file (git-ignored) by scripts/k8s-create-secrets.sh
+  - name: mercury-jwt-keys
+    files:
+      - jwt-private.pem
+      - jwt-public.pem
 generatorOptions:
   disableNameSuffixHash: true

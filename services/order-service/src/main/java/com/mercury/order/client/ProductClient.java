@@ -21,6 +21,8 @@ import java.util.UUID;
 @Component
 public class ProductClient {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ProductClient.class);
+
     private final RestClient restClient;
     private final DownstreamGuard guard;
 
@@ -50,9 +52,13 @@ public class ProductClient {
                         .retrieve()
                         .body(ProductDetails.class);
             } catch (ResourceAccessException e) {
+                log.warn("product lookup productId={} failed: {}", productId, e.getMessage());
                 throw new ProductServiceException(HttpStatus.SERVICE_UNAVAILABLE, null, e);
             }
-        }, rejection -> new ProductServiceException(HttpStatus.SERVICE_UNAVAILABLE, null, rejection, true));
+        }, rejection -> {
+            log.warn("product lookup productId={} not attempted: {}", productId, rejection.toString());
+            return new ProductServiceException(HttpStatus.SERVICE_UNAVAILABLE, null, rejection, true);
+        });
     }
 
     private static String readBody(InputStream body) {

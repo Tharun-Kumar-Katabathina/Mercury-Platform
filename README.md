@@ -22,4 +22,9 @@ Microservices e-commerce platform.
 - [Saga reliability and recovery](docs/saga-recovery.md): durable saga state, recovery worker, circuit breaker, failure scenarios
 - [Production infrastructure](docs/infrastructure.md): Docker images, production-like Compose stack, Kubernetes manifests, health and graceful shutdown
 - [Observability](docs/observability.md): Prometheus metrics, Grafana dashboards, distributed traces across REST and Kafka, log correlation
+- [Security](docs/security.md): JWT, roles, gateway, secrets, scanning, and what is not covered
+- [Resilience](docs/resilience.md) and the [failure matrix](docs/failure-matrix.md): every failure injected, what happened, what was checked
+- [Performance](docs/performance.md): load tests from 100 to 10,000 concurrent users, baseline vs optimized
+- [Recommendations](docs/recommendations.md): purchase features, vector search, personalised results
+- [CI/CD](docs/ci-cd.md): the pipeline and its gates
 - [Local development](docs/local-development.md): run the services, run the tests

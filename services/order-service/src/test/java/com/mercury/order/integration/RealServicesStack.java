@@ -121,6 +121,8 @@ final class RealServicesStack {
                     .redirectErrorStream(true)
                     .redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile()));
             builder.environment().put("SERVER_PORT", String.valueOf(port));
+            // these tests are about the business flows and failure handling; authentication has its own tests and suite
+            builder.environment().put("SECURITY_ENABLED", "false");
             builder.environment().put("POSTGRES_USER", dbUsername());
             builder.environment().put("POSTGRES_PASSWORD", dbPassword());
             builder.environment().putAll(environment);

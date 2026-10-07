@@ -55,6 +55,8 @@ bounded backoff (section 7), and only then does a record go to the dead-letter t
 
 ## 3. Event contracts
 
+> **Phase 16:** `OrderCreated` also carries `customerId` (the token subject; null when authentication is off), which the Recommendation Service uses to attribute a purchase. It consumes `mercury.order.events` in its own consumer group, so Notification and Recommendation each see every event.
+
 Every event has `eventId` (a UUID, the deduplication key), `eventType`, `occurredAt` (ISO-8601) and `orderId`.
 Events carry facts about the order and **never** contain secrets or the client's Idempotency-Key.
 

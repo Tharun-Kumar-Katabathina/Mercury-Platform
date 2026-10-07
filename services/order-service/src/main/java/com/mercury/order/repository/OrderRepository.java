@@ -15,6 +15,11 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
     @EntityGraph(attributePaths = "items")
     Optional<Order> findWithItemsById(UUID id);
 
+    @Query("select o.customerId from Order o where o.id = :id")
+    Optional<String> findCustomerIdById(@Param("id") UUID id);
+
+    boolean existsById(UUID id);
+
     @Query("select o.reservationMode from Order o where o.id = :id")
     Optional<com.mercury.order.model.ReservationMode> findModeById(@Param("id") UUID id);
 

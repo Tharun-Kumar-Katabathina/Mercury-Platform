@@ -43,7 +43,8 @@ public class DownstreamGuard {
 
         // Resilience4j would silently cap minimum-calls at the window size, which makes the circuit
         // open far earlier than configured. Refuse the contradiction instead of hiding it.
-        if (settings.minimumCalls() > settings.slidingWindowSize()) {
+        if (settings.slidingWindowType() == ResilienceProperties.Downstream.WindowType.COUNT_BASED
+                && settings.minimumCalls() > settings.slidingWindowSize()) {
             throw new IllegalArgumentException("order.resilience." + name + ".minimum-calls ("
                     + settings.minimumCalls() + ") cannot exceed sliding-window-size ("
                     + settings.slidingWindowSize() + ")");
@@ -51,6 +52,8 @@ public class DownstreamGuard {
 
         CircuitBreaker breaker = CircuitBreaker.of(name, CircuitBreakerConfig.custom()
                 .failureRateThreshold(settings.failureRateThreshold())
+                .slidingWindowType(settings.slidingWindowType() == ResilienceProperties.Downstream.WindowType.TIME_BASED
+                        ? CircuitBreakerConfig.SlidingWindowType.TIME_BASED : CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
                 .slidingWindowSize(settings.slidingWindowSize())
                 .minimumNumberOfCalls(settings.minimumCalls())
                 .waitDurationInOpenState(settings.waitDurationInOpenState())

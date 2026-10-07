@@ -17,7 +17,7 @@ public record ResilienceProperties(
     public record Downstream(
             /** open the circuit when at least this percentage of recorded calls failed */
             @DefaultValue("50") float failureRateThreshold,
-            /** how many of the most recent calls the failure rate is measured over */
+            /** how many of the most recent calls (or seconds, when TIME_BASED) the failure rate is measured over */
             @DefaultValue("20") int slidingWindowSize,
             /** calls needed before the failure rate is evaluated at all */
             @DefaultValue("10") int minimumCalls,
@@ -28,6 +28,14 @@ public record ResilienceProperties(
             /** most simultaneous in-flight calls to this service */
             @DefaultValue("25") int maxConcurrentCalls,
             /** how long a call may wait for a free slot (0 = reject at once) */
-            @DefaultValue("0ms") Duration maxWait) {
+            @DefaultValue("0ms") Duration maxWait,
+            /**
+             * COUNT_BASED: the window is the last N calls. TIME_BASED: the window is the last N SECONDS, so failures
+             * from an outage age out by themselves; with COUNT_BASED, old failures can linger after the dependency has
+             * recovered and open the circuit again on a healthy service (seen when a service returns and traffic is light).
+             */
+            @DefaultValue("COUNT_BASED") WindowType slidingWindowType) {
+
+        public enum WindowType { COUNT_BASED, TIME_BASED }
     }
 }

@@ -1,6 +1,6 @@
 # Mercury platform, production-like.
 #
-#   cp .env.example .env            # set POSTGRES_PASSWORD (scripts/platform-up.sh checks it)
+#   scripts/init-secrets.sh         # once: random .env and the JWT key pair (both git-ignored)
 #   docker compose -f docker-compose.yml --profile platform up -d --build
 #
 # Infrastructure (postgres, kafka, qdrant) has no profile and always starts; the four services are in the
@@ -34,6 +34,11 @@ x-java-env: &java-env
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
   KAFKA_BOOTSTRAP_SERVERS: kafka:29092
   SHUTDOWN_TIMEOUT: 25s
+  # authentication: every service verifies tokens with the user-service's PUBLIC key. SECURITY_ENABLED=false exists
+  # only for local experiments and for the load tests; it is never the default.
+  SECURITY_ENABLED: ${SECURITY_ENABLED:-true}
+  JWT_PUBLIC_KEY_FILE: /run/secrets/jwt_public
+  USER_SERVICE_URL: http://user-service:8085
 
 services:
   # ---- infrastructure ----------------------------------------------------------------------------
@@ -108,6 +113,22 @@ services:
         limits: { cpus: "1.0", memory: 384M }
     networks: [data]
 
+  redis:
+    # Cache for hot reads (product lookups). A cache, not a store: nothing here is the only copy of anything,
+    # so it is bounded (LRU eviction) and has no persistence.
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "96mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128M }
+    networks: [data]
+
   # ---- services (profile "platform") ---------------------------------------------------------------
   product-service:
     <<: *service
@@ -119,10 +140,16 @@ services:
     image: mercury/product-service:${MERCURY_VERSION:-dev}
     environment:
       <<: *java-env
+      SERVICE_CLIENT_ID: product-service
+      SERVICE_CLIENT_SECRET: ${PRODUCT_SERVICE_SECRET:-}
       PRODUCT_DB_URL: jdbc:postgresql://postgres:5432/mercury_product
       INVENTORY_SERVICE_URL: http://inventory-service:8082
+      REDIS_HOST: redis
+      PRODUCT_CACHE_ENABLED: ${PRODUCT_CACHE_ENABLED:-false}
+    secrets: [jwt_public]
     depends_on:
       postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
     ports: ["127.0.0.1:8081:8081"]
     deploy:
       resources:
@@ -139,6 +166,7 @@ services:
     environment:
       <<: *java-env
       INVENTORY_DB_URL: jdbc:postgresql://postgres:5432/mercury_inventory
+    secrets: [jwt_public]
     depends_on:
       postgres: { condition: service_healthy }
       kafka: { condition: service_healthy }
@@ -157,10 +185,18 @@ services:
     image: mercury/order-service:${MERCURY_VERSION:-dev}
     environment:
       <<: *java-env
+      SERVICE_CLIENT_ID: order-service
+      SERVICE_CLIENT_SECRET: ${ORDER_SERVICE_SECRET:-}
       ORDER_DB_URL: jdbc:postgresql://postgres:5432/mercury_order
       PRODUCT_SERVICE_URL: http://product-service:8081
       INVENTORY_SERVICE_URL: http://inventory-service:8082
       ORDER_RESERVATION_MODE: ${ORDER_RESERVATION_MODE:-SYNC}
+      # the circuit breakers look at the last 20 SECONDS, not the last 20 calls, so an outage ages out by itself
+      ORDER_PRODUCT_CB_WINDOW_TYPE: TIME_BASED
+      ORDER_PRODUCT_CB_WINDOW: "20"
+      ORDER_INVENTORY_CB_WINDOW_TYPE: TIME_BASED
+      ORDER_INVENTORY_CB_WINDOW: "20"
+    secrets: [jwt_public]
     depends_on:
       postgres: { condition: service_healthy }
       kafka: { condition: service_healthy }
@@ -182,6 +218,7 @@ services:
     environment:
       <<: *java-env
       NOTIFICATION_DB_URL: jdbc:postgresql://postgres:5432/mercury_notification
+    secrets: [jwt_public]
     depends_on:
       postgres: { condition: service_healthy }
       kafka: { condition: service_healthy }
@@ -190,6 +227,83 @@ services:
       resources:
         limits: { cpus: "2.0", memory: 448M }
 
+  user-service:
+    <<: *service
+    profiles: [platform]
+    build:
+      context: ./services/user-service
+      dockerfile: ../../infrastructure/docker/Dockerfile.service
+      args: { SERVICE: user-service, PORT: "8085" }
+    image: mercury/user-service:${MERCURY_VERSION:-dev}
+    environment:
+      <<: *java-env
+      USER_DB_URL: jdbc:postgresql://postgres:5432/mercury_user
+      JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private
+      JWT_REQUIRE_KEYS: "true"
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SERVICE_CLIENTS: order-service:${ORDER_SERVICE_SECRET:-},product-service:${PRODUCT_SERVICE_SECRET:-}
+      JWT_USER_TTL: ${JWT_USER_TTL:-15m}
+    secrets: [jwt_private, jwt_public]
+    depends_on:
+      postgres: { condition: service_healthy }
+    ports: ["127.0.0.1:8085:8085"]
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 448M }
+
+  recommendation-service:
+    <<: *service
+    profiles: [platform]
+    build:
+      context: ./services/recommendation-service
+      dockerfile: ../../infrastructure/docker/Dockerfile.service
+      args: { SERVICE: recommendation-service, PORT: "8086" }
+    image: mercury/recommendation-service:${MERCURY_VERSION:-dev}
+    environment:
+      <<: *java-env
+      RECOMMENDATION_DB_URL: jdbc:postgresql://postgres:5432/mercury_recommendation
+      QDRANT_URL: http://qdrant:6333
+      REDIS_HOST: redis
+    secrets: [jwt_public]
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      qdrant: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports: ["127.0.0.1:8086:8086"]
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 448M }
+
+  api-gateway:
+    <<: *service
+    profiles: [platform]
+    build:
+      context: ./services/api-gateway
+      dockerfile: ../../infrastructure/docker/Dockerfile.service
+      args: { SERVICE: api-gateway, PORT: "8090" }
+    image: mercury/api-gateway:${MERCURY_VERSION:-dev}
+    environment:
+      SECURITY_ENABLED: ${SECURITY_ENABLED:-true}
+      JWT_PUBLIC_KEY_FILE: /run/secrets/jwt_public
+      SHUTDOWN_TIMEOUT: 25s
+      USER_SERVICE_URL: http://user-service:8085
+      PRODUCT_SERVICE_URL: http://product-service:8081
+      ORDER_SERVICE_URL: http://order-service:8083
+      NOTIFICATION_SERVICE_URL: http://notification-service:8084
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+    secrets: [jwt_public]
+    depends_on:
+      user-service: { condition: service_healthy }
+      product-service: { condition: service_healthy }
+      order-service: { condition: service_healthy }
+    ports: ["127.0.0.1:8090:8090"]
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 384M }
+
 networks:
   # The data tier (Postgres, Kafka, Qdrant) lives here only. `internal` means no route to the outside world
   # and no published ports: only containers attached to this network can reach it.
@@ -197,6 +311,13 @@ networks:
     internal: true
   # What the services use to be reachable from the host (127.0.0.1 only) and to call out.
   edge: {}
+
+secrets:
+  # created by scripts/init-secrets.sh (git-ignored). The private key is mounted only into the user-service.
+  jwt_private:
+    file: ./.secrets/jwt-private.pem
+  jwt_public:
+    file: ./.secrets/jwt-public.pem
 
 volumes:
   postgres_data:

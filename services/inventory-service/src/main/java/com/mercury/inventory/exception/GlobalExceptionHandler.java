@@ -1,6 +1,7 @@
 package com.mercury.inventory.exception;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.web.bind.annotation.*;
 
@@ -80,5 +81,24 @@ public class GlobalExceptionHandler {
                 "error", error,
                 "message", message
         );
+    }
+
+    /**
+     * The database is unreachable or saturated (stopped, restarting, connection pool exhausted, query timed out).
+     * That is a temporary condition of the platform, not a bug in the request: 503 with Retry-After, never 500.
+     */
+    @ExceptionHandler({
+            org.springframework.transaction.CannotCreateTransactionException.class,
+            org.springframework.dao.DataAccessResourceFailureException.class,
+            org.springframework.dao.QueryTimeoutException.class})
+    public ResponseEntity<Map<String, Object>> handleDatabaseUnavailable(Exception exception) {
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header("Retry-After", "5")
+                .body(Map.of(
+                        "timestamp", Instant.now(),
+                        "status", 503,
+                        "error", "DATABASE_UNAVAILABLE",
+                        "message", "The database is temporarily unavailable, please retry shortly"));
     }
 }

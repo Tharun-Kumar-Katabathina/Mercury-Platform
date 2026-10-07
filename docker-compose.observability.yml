@@ -18,6 +18,9 @@ services:
   inventory-service: *traced
   order-service: *traced
   notification-service: *traced
+  user-service: *traced
+  recommendation-service: *traced
+  api-gateway: *traced
 
   jaeger:
     image: jaegertracing/jaeger:2.9.0          # collector (OTLP) + storage + UI in one process, in memory
@@ -41,8 +44,10 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
       - --web.enable-lifecycle
+      - --web.enable-remote-write-receiver      # load-test results (k6) are written here too
     volumes:
       - ./infrastructure/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     ports: ["127.0.0.1:9090:9090"]
     healthcheck:
@@ -105,6 +110,18 @@ services:
     deploy:
       resources:
         limits: { cpus: "0.5", memory: 96M }
+    networks: [data]
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.74.0
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on:
+      redis: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
     networks: [data]
 
   cadvisor:

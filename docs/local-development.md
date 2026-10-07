@@ -2,9 +2,11 @@
 
 > The Order Service (port 8083) has its own section in [order-service.md](order-service.md#12-local-development). Kafka and the Notification Service (port 8084) are covered in [event-driven-architecture.md](event-driven-architecture.md#11-local-development): `docker compose up -d postgres kafka`, then create the `mercury_notification` database once.
 
-> **Run everything in containers (Phase 11):** `docker compose -f docker-compose.yml --profile platform up -d --build`
-> after `cp .env.example .env`; see [infrastructure.md](infrastructure.md). Note: the developer override publishes
-> Postgres on 5432 with the password `mercury` (or `$POSTGRES_PASSWORD`).
+> **Run everything in containers:** `scripts/init-secrets.sh` once (random secrets and the JWT keys, both git-ignored), then
+> `docker compose -f docker-compose.yml --profile platform up -d --build`; see [infrastructure.md](infrastructure.md). **There is no default
+> database password any more.** If you already have a local `mercury-postgres` volume created with the old password `mercury`, put
+> `POSTGRES_PASSWORD=mercury` in `.env` (or delete the volume) so the services can still connect. To run a service from your IDE without
+> authentication, set `SECURITY_ENABLED=false`.
 >
 > **Asynchronous reservation (Phase 10):** Inventory now also needs Kafka (`docker compose up -d postgres kafka`;
 > it still starts and serves REST without it). To try the ASYNC order flow start Order Service with

@@ -5,6 +5,9 @@ import com.mercury.product.dto.InventoryReservationResult;
 import com.mercury.product.dto.InventoryResponse;
 import com.mercury.product.dto.ReserveInventoryRequest;
 import com.mercury.product.exception.InventoryServiceException;
+import com.mercury.product.security.ServiceTokenProvider;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -32,12 +35,31 @@ public class InventoryClient {
 
     private final RestClient restClient;
 
+    /** Without service authentication (unit tests). */
+    public InventoryClient(RestClient.Builder builder, String inventoryServiceUrl) {
+        this(builder, inventoryServiceUrl, null);
+    }
+
+    @Autowired
     public InventoryClient(
             RestClient.Builder builder,
-            @Value("${inventory.service.url}") String inventoryServiceUrl) {
+            @Value("${inventory.service.url}") String inventoryServiceUrl,
+            ObjectProvider<ServiceTokenProvider> tokens) {
 
         this.restClient = builder
                 .baseUrl(inventoryServiceUrl)
+                .requestInterceptor((request, body, execution) -> {
+                    // service-to-service authentication: a short-lived SERVICE token from the user-service
+                    ServiceTokenProvider provider = tokens == null ? null : tokens.getIfAvailable();
+                    if (provider != null) {
+                        try {
+                            request.getHeaders().setBearerAuth(provider.token());
+                        } catch (ServiceTokenProvider.UnavailableException e) {
+                            throw new java.io.IOException(e.getMessage(), e);   // surfaces as "service unreachable"
+                        }
+                    }
+                    return execution.execute(request, body);
+                })
                 .defaultStatusHandler(
                         status -> status.isError(),
                         (request, response) -> {
