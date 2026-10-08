@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Performance smoke test for CI: 100 concurrent shoppers for 30 seconds against the gateway, with hard thresholds
-# (error rate under 1%, browse p95 under 500 ms, order p95 under 2 s). A change that makes the platform
+# (error rate under 1%, browse p95 under 500 ms, order p95 under 2 s). All shoppers share one token, so the gateway must be started with
+# RATE_LIMIT_USER_PER_SECOND / RATE_LIMIT_USER_BURST raised (CI does). A change that makes the platform
 # dramatically slower or flaky fails the pipeline here, long before the full load test.
 set -euo pipefail
 cd "$(dirname "$0")/../.."

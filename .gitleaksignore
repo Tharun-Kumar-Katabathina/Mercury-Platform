@@ -1,0 +1,3 @@
+# False positive: a unit test asserting that the Idempotency-Key header is forwarded; the value is a literal test string,
+# not a credential (rule generic-api-key matches the word "Key" next to a high-entropy-looking string).
+9e013b98f15d683d8cb23206a2ab1c5811a625b5:services/product-service/src/test/java/com/mercury/product/client/InventoryClientTests.java:generic-api-key:60

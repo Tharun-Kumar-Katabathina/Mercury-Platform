@@ -93,6 +93,8 @@ jobs:
           shellcheck -S warning scripts/*.sh scripts/lib/*.sh
       - name: Python harnesses compile
         run: python3 -m py_compile scripts/chaos/*.py scripts/perf/*.py scripts/security/*.py
+      - name: The load balancer's nginx configuration is valid
+        run: docker run --rm -v "$PWD/infrastructure/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" nginx:1.27-alpine nginx -t
       - name: Docker Compose files are valid
         run: |
           export POSTGRES_PASSWORD=ci
@@ -108,6 +110,14 @@ jobs:
           done
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz -C /tmp
           /tmp/kubeconform -strict -summary -kubernetes-version 1.31.0 /tmp/local.yaml /tmp/production.yaml
+      - name: Every deployment the deploy job waits for exists in both overlays
+        run: |
+          for overlay in local production; do
+            deployed=$(awk '/^kind: Deployment/{d=1} d && /^  name:/{print $2; d=0}' "/tmp/$overlay.yaml")
+            for d in product-service inventory-service order-service notification-service user-service recommendation-service api-gateway; do
+              grep -qx "$d" <<<"$deployed" || { echo "::error::deployment/$d is missing from the $overlay overlay"; exit 1; }
+            done
+          done
       - name: Workflows are valid
         uses: docker://rhysd/actionlint:1.7.7
         with:
@@ -225,6 +235,11 @@ jobs:
       - name: Generate throw-away secrets
         run: scripts/init-secrets.sh
       - name: Start the platform
+        # the performance smoke below sends 100 shoppers' traffic with ONE administrator token, which the per-user rate limit
+        # (30/s) would throttle: that is the limiter working, not the platform being slow. Per-IP and login limits stay at their defaults.
+        env:
+          RATE_LIMIT_USER_PER_SECOND: "1000"
+          RATE_LIMIT_USER_BURST: "2000"
         run: docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile platform up -d --build --wait --wait-timeout 600
       - name: Smoke test (create a product, order it, replay it, see the notification)
         run: set -a && . ./.env && set +a && scripts/smoke-test.sh

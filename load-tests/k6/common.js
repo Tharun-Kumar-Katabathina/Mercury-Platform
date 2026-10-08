@@ -32,7 +32,8 @@ export function seed() {
   for (let i = 0; i < PRODUCTS; i++) {
     const p = http.post(`${PRODUCT}/api/v1/products`,
       JSON.stringify({ name: `Load item ${i}`, sku: `LOAD-${run}-${i}`, price: 10 + i, quantity: STOCK }),
-      { headers: { ...JSON_HEADERS, ...AUTH } });
+      // the scripts set discardResponseBodies for the measured phase; setup must read the new id from the body
+      { headers: { ...JSON_HEADERS, ...AUTH }, responseType: 'text' });
     if (p.status !== 201) throw new Error(`seed product failed: ${p.status} ${p.body}`);
     const id = p.json('id');
     const inv = http.post(`${INVENTORY}/api/v1/inventory`,
