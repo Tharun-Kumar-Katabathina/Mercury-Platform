@@ -1,5 +1,7 @@
 package com.mercury.order.exception;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
@@ -16,6 +18,8 @@ import java.util.stream.Collectors;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     private final JsonMapper jsonMapper;
 
@@ -171,5 +175,43 @@ public class GlobalExceptionHandler {
                         "status", 503,
                         "error", "DATABASE_UNAVAILABLE",
                         "message", "The database is temporarily unavailable, please retry shortly"));
+    }
+
+    /**
+     * A transaction that fails to commit or roll back is reported by Spring as a system exception, whatever the reason.
+     * When the reason is that the database closed or killed the connection (it restarted, or failed over) this is the same
+     * temporary outage as above: 503. Any other persistence failure is a bug and stays a 500 with nothing revealed.
+     */
+    @ExceptionHandler({org.springframework.orm.jpa.JpaSystemException.class,
+            org.springframework.transaction.TransactionSystemException.class})
+    public ResponseEntity<Map<String, Object>> handlePersistenceSystemFailure(Exception exception) {
+
+        if (isLostConnection(exception)) {
+            log.warn("database connection lost during a transaction: {}", exception.getMessage());
+            return handleDatabaseUnavailable(exception);
+        }
+        log.error("persistence failure", exception);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of(
+                        "timestamp", Instant.now(),
+                        "status", 500,
+                        "error", "INTERNAL_ERROR",
+                        "message", "An unexpected error occurred"));
+    }
+
+    /** SQLSTATE class 08 (connection exception) and 57P (the server shut down or cannot connect), or a connection the pool reports closed. */
+    private static boolean isLostConnection(Throwable failure) {
+        for (Throwable t = failure; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof java.sql.SQLException sql) {
+                String state = sql.getSQLState();
+                if (state != null && (state.startsWith("08") || state.startsWith("57P"))) {
+                    return true;
+                }
+                if ("Connection is closed".equals(sql.getMessage())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

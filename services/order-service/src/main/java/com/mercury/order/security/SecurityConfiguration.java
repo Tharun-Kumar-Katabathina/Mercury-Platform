@@ -63,6 +63,9 @@ public class SecurityConfiguration {
 
         http
                 .authorizeHttpRequests(a -> a
+                        // the container's internal error dispatch (/error) must keep the real status: authorising it like a request
+                        // would turn every unhandled failure into a 403 for the customer (found by the failure matrix, F08)
+                        .dispatcherTypeMatchers(jakarta.servlet.DispatcherType.ERROR).permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/orders").hasAnyRole("USER", "ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/v1/orders/*").authenticated()   // ownership is checked in the service
                         .requestMatchers("/actuator/health/**", "/actuator/prometheus").permitAll()

@@ -63,6 +63,9 @@ public class SecurityConfiguration {
 
         http
                 .authorizeHttpRequests(a -> a
+                        // the container's internal error dispatch (/error) must keep the real status; authorising it like a request
+                        // turns every unhandled failure into a 403/401 for the caller (found by the failure matrix, F08)
+                        .dispatcherTypeMatchers(jakarta.servlet.DispatcherType.ERROR).permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/products", "/api/v1/products/*").permitAll()   // public catalogue
                         .requestMatchers(HttpMethod.POST, "/api/v1/products/*/reserve").hasAnyRole("USER", "ADMIN", "SERVICE")
                         .requestMatchers(HttpMethod.POST, "/api/v1/products").hasRole("ADMIN")
