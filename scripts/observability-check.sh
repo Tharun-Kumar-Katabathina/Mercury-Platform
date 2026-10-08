@@ -21,10 +21,11 @@ PROM=http://localhost:9090 JAEGER=http://localhost:16686 GRAFANA=http://localhos
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 fail() { echo "OBSERVABILITY CHECK FAIL: $*" >&2; exit 1; }
 ok()   { echo "  ok: $*"; }
+# shellcheck disable=SC2154  # rc is assigned inside the trap string itself
 trap 'rc=$?; [[ $rc -ne 0 ]] && $DC ps 2>/dev/null | tail -20; [[ "${1:-}" == --keep ]] || { $DC down -v --remove-orphans >/dev/null 2>&1; rm -f "$PW_FILE"; }; exit $rc' EXIT
 
 wait_healthy() {
-  for i in $(seq 1 150); do
+  for _ in $(seq 1 150); do
     bad=$($DC ps --format '{{.Name}}|{{.Health}}' | grep -v -E '\|(healthy)?$' || true)
     [[ -z $bad ]] && return 0; sleep 2
   done; fail "not healthy: $bad"
@@ -54,7 +55,7 @@ wait_healthy
 $DC ps --format '{{.Name}} {{.Status}}' | sed 's/^/  /'
 
 step "2. every scrape target is up"
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
   DOWN=$(curl -sf $PROM/api/v1/targets | python3 -c "
 import sys,json
 t=json.load(sys.stdin)['data']['activeTargets']
@@ -70,17 +71,17 @@ POSTS0=$(prom 'sum(http_server_requests_seconds_count{application="order-service
 echo "  orders created=$CREATED0 reservations=$RES0 POST /orders=$POSTS0"
 
 step "4. a synchronous order: trace across REST (Order -> Product -> Inventory)"
-read -r ORDER1 PRODUCT1 < <(place_order_and_wait)
+read -r ORDER1 _ < <(place_order_and_wait)
 TRACE1=$(trace_id_for_order "$ORDER1"); [[ -n $TRACE1 ]] || fail "no trace id in the order service log"
 echo "  order $ORDER1 trace $TRACE1"
 SERVICES1=""
-for i in $(seq 1 20); do SERVICES1=$(trace_services "$TRACE1" 2>/tmp/obs-spans || true); [[ $SERVICES1 == *inventory-service* && $SERVICES1 == *product-service* ]] && break; sleep 2; done
+for _ in $(seq 1 20); do SERVICES1=$(trace_services "$TRACE1" 2>/tmp/obs-spans || true); [[ $SERVICES1 == *inventory-service* && $SERVICES1 == *product-service* ]] && break; sleep 2; done
 echo "  services in the trace: $SERVICES1 ($(cat /tmp/obs-spans) spans)"
 for s in order-service product-service inventory-service; do [[ $SERVICES1 == *$s* ]] || fail "$s missing from the REST trace"; done
 ok "one trace spans Order, Product and Inventory"
 
 step "4b. metrics moved after the synchronous order"
-for i in $(seq 1 20); do
+for _ in $(seq 1 20); do
   CREATED1=$(prom 'sum(orders_created_total)'); RES1=$(prom 'sum(inventory_reservations_total{path="rest",result="reserved"})')
   POSTS1=$(prom 'sum(http_server_requests_seconds_count{application="order-service",method="POST",uri="/api/v1/orders"})')
   python3 -c "import sys; sys.exit(0 if $CREATED1 >= $CREATED0 + 1 and $RES1 >= $RES0 + 1 and $POSTS1 >= $POSTS0 + 2 else 1)" && break; sleep 2
@@ -92,17 +93,18 @@ ok "orders.created, inventory.reservations and the HTTP request counter all move
 step "5. an asynchronous order: trace across Kafka and the outbox"
 ORDER_RESERVATION_MODE=ASYNC $DC up -d --no-deps order-service >/tmp/obs-check-up.log 2>&1 || { tail -20 /tmp/obs-check-up.log; fail "switching order-service to ASYNC"; }
 wait_healthy
-read -r ORDER2 PRODUCT2 < <(place_order_and_wait)
+read -r ORDER2 _ < <(place_order_and_wait)
 TRACE2=$(trace_id_for_order "$ORDER2"); [[ -n $TRACE2 ]] || fail "no trace id for the async order"
 echo "  order $ORDER2 trace $TRACE2"
 SERVICES2=""
-for i in $(seq 1 30); do SERVICES2=$(trace_services "$TRACE2" 2>/tmp/obs-spans || true); [[ $SERVICES2 == *inventory-service* && $SERVICES2 == *notification-service* ]] && break; sleep 2; done
+for _ in $(seq 1 30); do SERVICES2=$(trace_services "$TRACE2" 2>/tmp/obs-spans || true); [[ $SERVICES2 == *inventory-service* && $SERVICES2 == *notification-service* ]] && break; sleep 2; done
 echo "  services in the trace: $SERVICES2 ($(cat /tmp/obs-spans) spans)"
 for s in order-service inventory-service notification-service; do [[ $SERVICES2 == *$s* ]] || fail "$s missing from the async trace"; done
 ok "one trace spans Order, Inventory and Notification through Kafka"
 
 step "6. logs are correlated"
 # the asynchronous trace: the Order container was recreated in step 5, so the first order's log is gone
+# shellcheck disable=SC2066  # one trace id on purpose: the loop variable keeps the body unchanged
 for pair in "$TRACE2"; do
   N=0; LIST=""
   for svc in order-service product-service inventory-service notification-service; do
@@ -115,7 +117,7 @@ done
 ok "the same trace id is in the logs of several services"
 
 step "7. metrics moved after the asynchronous order too"
-for i in $(seq 1 20); do
+for _ in $(seq 1 20); do
   ASYNC_RES=$(prom 'sum(inventory_reservations_total{path="async",result="reserved"})')
   ASYNC_CONSUMED=$(prom 'sum(order_inventory_events_consumed_total)')
   python3 -c "import sys; sys.exit(0 if $ASYNC_RES >= 1 and $ASYNC_CONSUMED >= 1 else 1)" && break; sleep 2

@@ -20,10 +20,11 @@ DC="docker compose -f docker-compose.yml --profile platform"
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 fail() { echo "PLATFORM CHECK FAIL: $*" >&2; exit 1; }
 cleanup() { [[ ${1:-} == --keep ]] || { step "cleaning up"; $DC down -v --remove-orphans >/dev/null 2>&1 || true; rm -f "$PW_FILE"; }; }
+# shellcheck disable=SC2154  # rc is assigned inside the trap string itself
 trap 'rc=$?; [[ $rc -ne 0 ]] && { $DC ps 2>/dev/null || true; $DC logs --tail 30 2>/dev/null || true; }; cleanup "${1:-}"; exit $rc' EXIT
 
 wait_healthy() { # every container of the project must report healthy
-  for i in $(seq 1 90); do
+  for _ in $(seq 1 90); do
     local unhealthy; unhealthy=$($DC ps --format '{{.Name}} {{.Health}}' | grep -v ' healthy$' || true)
     [[ -z $unhealthy ]] && return 0
     sleep 2
@@ -56,7 +57,7 @@ step "5. restart the data tier too (postgres, kafka, qdrant)"
 $DC restart postgres kafka qdrant
 wait_healthy
 # services reconnect on their own; give readiness a moment to flip back
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
   curl -sf localhost:8083/actuator/health/readiness >/dev/null && break || sleep 2
 done
 
