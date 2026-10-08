@@ -1,9 +1,9 @@
-# api-gateway: Deployment, Service, HorizontalPodAutoscaler, PodDisruptionBudget.
+# recommendation-service: Deployment, Service, HorizontalPodAutoscaler, PodDisruptionBudget.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: api-gateway
-  labels: { app.kubernetes.io/name: api-gateway, app.kubernetes.io/part-of: mercury, mercury/tier: app }
+  name: recommendation-service
+  labels: { app.kubernetes.io/name: recommendation-service, app.kubernetes.io/part-of: mercury, mercury/tier: app }
 spec:
   replicas: 2
   revisionHistoryLimit: 3
@@ -11,14 +11,14 @@ spec:
     type: RollingUpdate
     rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }     # never drop below the desired number of ready pods
   selector:
-    matchLabels: { app.kubernetes.io/name: api-gateway }
+    matchLabels: { app.kubernetes.io/name: recommendation-service }
   template:
     metadata:
-      labels: { app.kubernetes.io/name: api-gateway, app.kubernetes.io/part-of: mercury, mercury/tier: app }
+      labels: { app.kubernetes.io/name: recommendation-service, app.kubernetes.io/part-of: mercury, mercury/tier: app }
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/path: /actuator/prometheus
-        prometheus.io/port: "8090"
+        prometheus.io/port: "8086"
     spec:
       terminationGracePeriodSeconds: 45                   # > preStop (5s) + graceful shutdown phase (25s)
       automountServiceAccountToken: false
@@ -33,30 +33,26 @@ spec:
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
-            matchLabels: { app.kubernetes.io/name: api-gateway }
+            matchLabels: { app.kubernetes.io/name: recommendation-service }
       containers:
-        - name: api-gateway
-          image: mercury/api-gateway:dev                        # set per environment by the overlay (images:)
+        - name: recommendation-service
+          image: mercury/recommendation-service:dev                        # set per environment by the overlay (images:)
           imagePullPolicy: IfNotPresent
           ports:
-            - { name: http, containerPort: 8090 }
+            - { name: http, containerPort: 8086 }
           env:
-            - { name: SERVER_PORT, value: "8090" }
+            - { name: SERVER_PORT, value: "8086" }
+            - { name: KAFKA_BOOTSTRAP_SERVERS, valueFrom: { configMapKeyRef: { name: mercury-config, key: KAFKA_BOOTSTRAP_SERVERS } } }
             - { name: SHUTDOWN_TIMEOUT, value: 25s }
             - { name: JWT_PUBLIC_KEY_FILE, value: /run/secrets/jwt/jwt-public.pem }
-            - { name: USER_SERVICE_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: USER_SERVICE_URL } } }
-            - { name: SERVICE_CLIENT_ID, value: api-gateway }
-            - { name: SERVICE_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: mercury-secrets, key: ORDER_SERVICE_SECRET } } }
-            - { name: USER_SERVICE_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: USER_SERVICE_URL } } }
-            - { name: PRODUCT_SERVICE_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: PRODUCT_SERVICE_URL } } }
-            - { name: ORDER_SERVICE_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: ORDER_SERVICE_URL } } }
-            - { name: NOTIFICATION_SERVICE_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: NOTIFICATION_SERVICE_URL } } }
-            - { name: RECOMMENDATION_SERVICE_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: RECOMMENDATION_SERVICE_URL } } }
-            - { name: JWT_PUBLIC_KEY_FILE, value: /run/secrets/jwt/jwt-public.pem }
-            - { name: CORS_ALLOWED_ORIGINS, valueFrom: { configMapKeyRef: { name: mercury-config, key: CORS_ALLOWED_ORIGINS } } }
+            - { name: POSTGRES_USER, valueFrom: { secretKeyRef: { name: mercury-secrets, key: POSTGRES_USER } } }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: mercury-secrets, key: POSTGRES_PASSWORD } } }
+            - { name: RECOMMENDATION_DB_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: RECOMMENDATION_DB_URL } } }
+            - { name: QDRANT_URL, valueFrom: { configMapKeyRef: { name: mercury-config, key: QDRANT_URL } } }
+            - { name: REDIS_HOST, valueFrom: { configMapKeyRef: { name: mercury-config, key: REDIS_HOST } } }
           resources:
-            requests: { cpu: 150m, memory: 256Mi }
-            limits:   { cpu: 2000m, memory: 512Mi }
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 2000m, memory: 448Mi }
           # startup: allow a slow first start without the liveness probe killing the pod
           startupProbe:
             httpGet: { path: /actuator/health/liveness, port: http }
@@ -84,32 +80,28 @@ spec:
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
             - { name: jwt, mountPath: /run/secrets/jwt, readOnly: true }
-            - { name: jwt, mountPath: /run/secrets/jwt, readOnly: true }
       volumes:
         - name: tmp
           emptyDir: { medium: Memory, sizeLimit: 64Mi }
-        - name: jwt
-          secret: { secretName: mercury-jwt-keys, items: [ { key: jwt-public.pem, path: jwt-public.pem } ] }
         - name: jwt
           secret: { secretName: mercury-jwt-keys, items: [ { key: jwt-public.pem, path: jwt-public.pem } ] }
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: api-gateway
-  labels: { app.kubernetes.io/name: api-gateway, app.kubernetes.io/part-of: mercury }
+  name: recommendation-service
+  labels: { app.kubernetes.io/name: recommendation-service, app.kubernetes.io/part-of: mercury }
 spec:
-  type: LoadBalancer            # the only public entry point; put an Ingress with TLS in front in a real cluster
-  selector: { app.kubernetes.io/name: api-gateway }
+  selector: { app.kubernetes.io/name: recommendation-service }
   ports:
-    - { name: http, port: 8090, targetPort: http }
+    - { name: http, port: 8086, targetPort: http }
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: api-gateway
+  name: recommendation-service
 spec:
-  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: api-gateway }
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: recommendation-service }
   minReplicas: 2
   maxReplicas: 6
   metrics:
@@ -124,8 +116,8 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: api-gateway
+  name: recommendation-service
 spec:
   minAvailable: 1
   selector:
-    matchLabels: { app.kubernetes.io/name: api-gateway }
+    matchLabels: { app.kubernetes.io/name: recommendation-service }

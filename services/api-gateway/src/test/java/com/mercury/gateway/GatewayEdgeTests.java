@@ -37,7 +37,7 @@ class GatewayEdgeTests {
     @DynamicPropertySource
     static void wiring(DynamicPropertyRegistry registry) {
         registry.add("mercury.security.jwt.public-key", TestTokens::trustedPublicKeyPem);
-        for (String name : new String[]{"USER", "PRODUCT", "ORDER", "NOTIFICATION"}) {
+        for (String name : new String[]{"USER", "PRODUCT", "ORDER", "NOTIFICATION", "RECOMMENDATION"}) {
             registry.add(name + "_SERVICE_URL", DOWNSTREAM::url);
         }
     }
@@ -79,6 +79,28 @@ class GatewayEdgeTests {
                 .andExpect(status().isOk());
 
         assertThat(DOWNSTREAM.calls).extracting(StubDownstream.Call::path).containsExactly("/api/v1/products/42", "/api/v1/auth/login");
+    }
+
+    @Test
+    void popularRecommendationsArePublicButPersonalOnesNeedAToken() throws Exception {
+        mvc.perform(get("/api/v1/recommendations/popular?limit=5")).andExpect(status().isOk());
+        mvc.perform(get("/api/v1/recommendations/me")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/v1/recommendations/products/42/similar")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/v1/recommendations/me").header("Authorization", bearer(TestTokens.user("alice")))).andExpect(status().isOk());
+
+        assertThat(DOWNSTREAM.calls).extracting(StubDownstream.Call::path)
+                .containsExactly("/api/v1/recommendations/popular", "/api/v1/recommendations/me");
+    }
+
+    @Test
+    void recordingAnInteractionNeedsATokenAndIsForwardedToTheRecommendationService() throws Exception {
+        String body = "{\"productId\":\"42\",\"type\":\"VIEW\"}";
+
+        mvc.perform(post("/api/v1/interactions").contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/v1/interactions").contentType(MediaType.APPLICATION_JSON).content(body)
+                .header("Authorization", bearer(TestTokens.user("alice")))).andExpect(status().isOk());
+
+        assertThat(DOWNSTREAM.calls).extracting(StubDownstream.Call::path).containsExactly("/api/v1/interactions");
     }
 
     @Test

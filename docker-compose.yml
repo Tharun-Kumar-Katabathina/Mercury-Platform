@@ -292,8 +292,14 @@ services:
       PRODUCT_SERVICE_URL: http://product-service:8081
       ORDER_SERVICE_URL: http://order-service:8083
       NOTIFICATION_SERVICE_URL: http://notification-service:8084
+      RECOMMENDATION_SERVICE_URL: http://recommendation-service:8086
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      # the defaults are the gateway's own; a load test that sends every shopper's traffic with one token raises the per-user pair
+      RATE_LIMIT_IP_PER_SECOND: ${RATE_LIMIT_IP_PER_SECOND:-100}
+      RATE_LIMIT_IP_BURST: ${RATE_LIMIT_IP_BURST:-200}
+      RATE_LIMIT_USER_PER_SECOND: ${RATE_LIMIT_USER_PER_SECOND:-30}
+      RATE_LIMIT_USER_BURST: ${RATE_LIMIT_USER_BURST:-60}
     secrets: [jwt_public]
     depends_on:
       user-service: { condition: service_healthy }
