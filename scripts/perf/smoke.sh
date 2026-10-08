@@ -6,8 +6,18 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 network="${COMPOSE_PROJECT_NAME:-$(basename "$PWD" | tr '[:upper:]' '[:lower:]')}_data"
-login=$(curl -sf -X POST http://localhost:8090/api/v1/auth/login -H 'Content-Type: application/json' \
-  -d "{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}")
+# The security suite runs just before this in CI and ends with a burst of password guesses, so the gateway's login limiter is
+# still refusing for a moment (429 RATE_LIMITED, Retry-After). Wait that out; any other refusal is a real failure.
+login=""
+for _ in $(seq 1 30); do
+  code=$(curl -s -o /tmp/perf-smoke-login.$$ -w '%{http_code}' -X POST http://localhost:8090/api/v1/auth/login \
+    -H 'Content-Type: application/json' -d "{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}")
+  if [[ $code == 200 ]]; then login=$(cat /tmp/perf-smoke-login.$$); break; fi
+  [[ $code == 429 ]] || { echo "admin login failed: HTTP $code $(cat /tmp/perf-smoke-login.$$)" >&2; rm -f /tmp/perf-smoke-login.$$; exit 1; }
+  sleep 2
+done
+rm -f /tmp/perf-smoke-login.$$
+[[ -n $login ]] || { echo "admin login was still rate-limited after 60 s" >&2; exit 1; }
 token=$(printf '%s' "$login" | python3 -c 'import sys,json; print(json.load(sys.stdin)["accessToken"])')
 mkdir -p docs/performance-results/raw
 docker run --rm --network "$network" --user 0 \

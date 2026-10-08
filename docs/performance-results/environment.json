@@ -1,0 +1,23 @@
+{
+ "captured": "2026-10-08 02:24:56 -0500",
+ "git_commit": "2f6307b847758ee1337a0839fe2142c85fd314af",
+ "git_subject": "Phase 17.5: security hardening and reproducible chaos image",
+ "host": {
+  "os": "26.6.2",
+  "machine": "arm64",
+  "cpus": 8,
+  "ram_gb": 8.0
+ },
+ "docker": {
+  "version": "28.2.2",
+  "cpus": 8,
+  "memory_gb": 3.83
+ },
+ "k6_image": "grafana/k6@sha256:e66db15b860113878fa74670e31f5e274830b7b6e42c8bff28b2f2d86a257603",
+ "service_images": {
+  "product-service": "sha256:c1ac8307ceb5",
+  "inventory-service": "sha256:c0ba34b09806",
+  "order-service": "sha256:13ff4a9698cb"
+ },
+ "note": "k6, Prometheus, cAdvisor, Grafana, Jaeger and every service share this one machine and this one Docker VM."
+}

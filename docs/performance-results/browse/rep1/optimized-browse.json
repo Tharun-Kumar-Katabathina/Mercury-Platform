@@ -1,0 +1,188 @@
+{
+ "profile": "optimized",
+ "scenario": "browse",
+ "think_seconds": 3.0,
+ "buy_ratio": 0.05,
+ "hold": "45s",
+ "config": {
+  "PRODUCT_CACHE_ENABLED": "true",
+  "DB_POOL_SIZE": "30",
+  "DB_POOL_MIN_IDLE": "10",
+  "TOMCAT_MAX_THREADS": "400",
+  "TOMCAT_MAX_CONNECTIONS": "16384",
+  "TOMCAT_ACCEPT_COUNT": "500"
+ },
+ "replicas": {
+  "order": 2,
+  "product": 2
+ },
+ "indexes_dropped": false,
+ "started": "2026-10-08 15:26:53",
+ "host": {
+  "cpus": 8
+ },
+ "levels": [
+  {
+   "vus": 100,
+   "seconds": 82,
+   "requests": 1927,
+   "rps": 23.7,
+   "error_rate_pct": 0,
+   "checks_pass_pct": 100,
+   "latency_ms": {
+    "p50": 7.580417,
+    "p90": 64.70701660000002,
+    "p95": 3354.1124807999927,
+    "p99": 7337.603074839999,
+    "max": 8360.300754
+   },
+   "browse_ms": {
+    "p50": 7.520875,
+    "p95": 3772.0014351999994,
+    "p99": 7367.493198
+   },
+   "order_ms": {
+    "p50": null,
+    "p95": null,
+    "p99": null
+   },
+   "recommendation_ms": {
+    "similar": {
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "me": {
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "popular": {
+     "p50": null,
+     "p95": null,
+     "p99": null
+    }
+   },
+   "system": {
+    "docker_cpu_cores": 1.4051,
+    "docker_memory_mb": 2949.967872,
+    "order_cpu_pct": 0.0897,
+    "product_cpu_pct": 0.1453,
+    "order_heap_mb": 62.506464,
+    "db_pool_active_max": 0.0,
+    "db_pool_pending_max": 0.0,
+    "kafka_lag": 0,
+    "outbox_pending": 0.0,
+    "cache_hit_ratio": 0.9916
+   }
+  },
+  {
+   "vus": 500,
+   "seconds": 82,
+   "requests": 10328,
+   "rps": 128.4,
+   "error_rate_pct": 0,
+   "checks_pass_pct": 100,
+   "latency_ms": {
+    "p50": 3.1645624999999997,
+    "p90": 15.518920600000007,
+    "p95": 29.481768749999986,
+    "p99": 105.54200992999994,
+    "max": 297.6945
+   },
+   "browse_ms": {
+    "p50": 3.124479,
+    "p95": 29.27527884999999,
+    "p99": 104.33863335999996
+   },
+   "order_ms": {
+    "p50": null,
+    "p95": null,
+    "p99": null
+   },
+   "recommendation_ms": {
+    "similar": {
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "me": {
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "popular": {
+     "p50": null,
+     "p95": null,
+     "p99": null
+    }
+   },
+   "system": {
+    "docker_cpu_cores": 2.073,
+    "docker_memory_mb": 3027.972096,
+    "order_cpu_pct": 0.0746,
+    "product_cpu_pct": 0.192,
+    "order_heap_mb": 62.506464,
+    "db_pool_active_max": 0.0,
+    "db_pool_pending_max": 0.0,
+    "kafka_lag": 0,
+    "outbox_pending": 0.0,
+    "cache_hit_ratio": 0.9906
+   }
+  },
+  {
+   "vus": 1000,
+   "seconds": 82,
+   "requests": 20625,
+   "rps": 256.3,
+   "error_rate_pct": 0,
+   "checks_pass_pct": 100,
+   "latency_ms": {
+    "p50": 2.006583,
+    "p90": 13.181625200000001,
+    "p95": 29.379791599999987,
+    "p99": 128.56082315999998,
+    "max": 460.926041
+   },
+   "browse_ms": {
+    "p50": 1.993041,
+    "p95": 29.467716399999965,
+    "p99": 128.56082315999998
+   },
+   "order_ms": {
+    "p50": null,
+    "p95": null,
+    "p99": null
+   },
+   "recommendation_ms": {
+    "similar": {
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "me": {
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "popular": {
+     "p50": null,
+     "p95": null,
+     "p99": null
+    }
+   },
+   "system": {
+    "docker_cpu_cores": 2.1969,
+    "docker_memory_mb": 2955.894784,
+    "order_cpu_pct": 0.0823,
+    "product_cpu_pct": 0.1535,
+    "order_heap_mb": 62.506464,
+    "db_pool_active_max": 0.0,
+    "db_pool_pending_max": 0.0,
+    "kafka_lag": 0,
+    "outbox_pending": 0.0,
+    "cache_hit_ratio": 0.9951
+   }
+  }
+ ]
+}

@@ -1,0 +1,64 @@
+# Optimized profile, mixed, 1000 users, evidence of the Redis cache errors (Thu Oct  8 16:27:18 CDT 2026)
+## product-service-1 log: exception types
+(the exception-type count failed: the ugrep regex exceeded its complexity limit, and the stack was torn down before it could be repeated;
+ the two WARN lines below, cut at 400 characters, are what was captured. The full exception message was NOT captured.)
+
+## product-service-1 log: first cache-related warnings
+2026-10-08T21:24:40.216Z  INFO 1 --- [product-service] [           main] [                                                 ] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data Redis repositories in DEFAULT mode.
+2026-10-08T21:24:40.248Z  INFO 1 --- [product-service] [           main] [                                                 ] .RepositoryConfigurationExtensionSupport : Spring Data Redis - Could not safely identify store assignment for repository candidate interface com.mercury.product.repository.ProductRepository; If you want this repository to be a Redis repository, consider annotating your entit
+2026-10-08T21:24:40.249Z  INFO 1 --- [product-service] [           main] [                                                 ] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 11 ms. Found 0 Redis repository interfaces.
+	at org.postgresql.jdbc.PgStatement.executeCachedSql(PgStatement.java:356) ~[postgresql-42.7.13.jar:42.7.13]
+	at org.postgresql.jdbc.PgStatement.executeCachedSql(PgStatement.java:356) ~[postgresql-42.7.13.jar:42.7.13]
+2026-10-08T21:25:44.427Z  WARN 1 --- [product-service] [nio-8081-exec-8] [87dfb96235f1bae3e9d480f8bcb5a1b6-4ad7eba72e5b008a] c.mercury.product.service.ProductCache   : product cache read failed, serving from the database: org.springframework.data.redis.RedisConnectionFailureException: Unable to connect to Redis
+2026-10-08T21:25:45.515Z  WARN 1 --- [product-service] [nio-8081-exec-9] [e528377ed0c40767c35f850e5decb58a-b5b4ca74413e7f67] c.mercury.product.service.ProductCache   : product cache read failed, serving from the database: org.springframework.data.redis.RedisConnectionFailureException: Unable to connect to Redis
+2026-10-08T21:25:46.164Z  INFO 1 --- [product-service] [xecutorLoop-1-2] [                                                 ] i.l.core.protocol.ConnectionWatchdog     : Reconnecting, last destination was redis/172.22.0.2:6379
+## redis INFO stats/clients
+connected_clients:3
+maxclients:10000
+blocked_clients:0
+total_connections_received:77
+rejected_connections:0
+evicted_keys:0
+keyspace_hits:295
+keyspace_misses:90
+used_memory_human:1.28M
+maxmemory_human:96.00M
+maxmemory_policy:allkeys-lru
+# Commandstats
+cmdstat_hello:calls=15,usec=2548,usec_per_call=169.87,rejected_calls=0,failed_calls=0
+cmdstat_config|get:calls=32,usec=117236,usec_per_call=3663.62,rejected_calls=0,failed_calls=0
+cmdstat_info:calls=35,usec=154354,usec_per_call=4410.11,rejected_calls=0,failed_calls=0
+cmdstat_latency|histogram:calls=32,usec=30293,usec_per_call=946.66,rejected_calls=0,failed_calls=0
+cmdstat_latency|latest:calls=32,usec=2169,usec_per_call=67.78,rejected_calls=0,failed_calls=0
+cmdstat_ping:calls=32,usec=1545,usec_per_call=48.28,rejected_calls=0,failed_calls=0
+cmdstat_client|setname:calls=32,usec=5160,usec_per_call=161.25,rejected_calls=0,failed_calls=0
+## redis SLOWLOG
+10
+9
+1791494825
+24054
+INFO
+ALL
+172.22.0.8:41948
+redis_exporter
+8
+1791494815
+11014
+CONFIG
+GET
+*
+172.22.0.8:36586
+redis_exporter
+7
+1791494810
+21867
+CONFIG
+GET
+*
+172.22.0.8:54566
+redis_exporter
+
+## Reading (what this does and does not show)
+- product-service logged `RedisConnectionFailureException: Unable to conn...` from ProductCache ("product cache read failed, serving from the database") and the Lettuce ConnectionWatchdog was reconnecting to redis:6379.
+- Redis itself was healthy at the time it was inspected after the run: 0 rejected connections, 0 evicted keys, 3 clients, 1.28M of 96M used, slowlog holds only the redis_exporter's INFO/CONFIG calls.
+- So the errors are on the client/connection side, under load. Why the connection fails (event-loop or thread starvation in a 3.83 GB Docker VM, a connect timeout, or something else) was NOT established.

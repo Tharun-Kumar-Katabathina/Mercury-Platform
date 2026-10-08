@@ -1,0 +1,18 @@
+DEFECT FOUND AND FIXED while running the 100-user gate in the order CI runs it
+(platform up -> scripts/smoke-test.sh -> scripts/security/run.py -> scripts/perf/smoke.sh).
+
+Observed with the committed scripts/perf/smoke.sh (commit 2f6307b), on 2026-10-08 ~02:27 CDT:
+  - the security suite finished: "45/45 checks passed"; its last test is a burst of password guesses
+  - scripts/perf/smoke.sh was started immediately afterwards and exited 22 (curl -f: HTTP error) in under a second, three runs in a row
+  - the same login, issued by hand right after the suite:
+
+      HTTP/1.1 429
+      Retry-After: 1
+      {"timestamp":"2026-10-08T07:30:06.194849128Z","status":429,"error":"RATE_LIMITED","message":"Too many requests, retry in 1s"}
+
+Cause: the gateway's login limiter was still refusing for a moment after the brute-force test; smoke.sh used `curl -sf`, so the first
+refusal ended the script instead of waiting as Retry-After asks.  Reproduced again against the unmodified script on a second attempt
+(exit=22 straight after the security suite).
+
+Fix (scripts/perf/smoke.sh): retry the login while the answer is 429 (every 2 s, up to 60 s); any other refusal still fails at once.
+No threshold was changed (error rate < 1 %, browse p95 < 500 ms, order p95 < 2 s).

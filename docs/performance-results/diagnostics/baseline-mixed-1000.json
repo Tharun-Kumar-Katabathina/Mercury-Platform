@@ -1,0 +1,58 @@
+{
+ "label": "baseline-mixed-1000",
+ "window_seconds": 150,
+ "pool_active_max_by_service": {
+  "product-service": 10.0,
+  "inventory-service": 4.0,
+  "notification-service": 1.0,
+  "order-service": 10.0
+ },
+ "pool_pending_max_by_service": {
+  "product-service": 184.0,
+  "inventory-service": 0.0,
+  "notification-service": 0.0,
+  "order-service": 0.0
+ },
+ "pool_size_by_service": {
+  "product-service": 10.0,
+  "inventory-service": 10.0,
+  "notification-service": 10.0,
+  "order-service": 10.0
+ },
+ "pool_timeouts_by_service": {
+  "product-service": 0.0,
+  "inventory-service": 0.0,
+  "notification-service": 0.0,
+  "order-service": 0.0
+ },
+ "cpu_fraction_by_service": {
+  "product-service": 0.4989,
+  "inventory-service": 0.2819,
+  "notification-service": 0.2165,
+  "order-service": 0.6033
+ },
+ "http_p95_seconds_by_service": {
+  "inventory-service": 0.5387,
+  "order-service": 5.289,
+  "product-service": 1.9078
+ },
+ "http_requests_per_second_by_service": {
+  "inventory-service": 4.5359,
+  "order-service": 4.6417,
+  "product-service": 99.122
+ },
+ "http_5xx_by_service": {
+  "order-service": 16.7873
+ },
+ "product_cache_by_result": {
+  "error": 0.0,
+  "hit": 0.0,
+  "miss": 0.0
+ },
+ "container_memory_mb": {},
+ "container_memory_limit_mb": {},
+ "container_cpu_cores": {},
+ "kafka_consumer_lag": {
+  "all": 0.0
+ }
+}
