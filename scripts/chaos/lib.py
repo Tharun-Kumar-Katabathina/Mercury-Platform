@@ -282,6 +282,19 @@ def place_order(pid, qty=1, key=None, token="customer"):
                 {"items": [{"productId": pid, "quantity": qty}]}, key=key or f"chaos-{uuid.uuid4()}", timeout=40, token=token)
 
 
+def warm_up(orders=12, workers=4):
+    """Exercise the whole order path (gateway-less: token check, Product lookup, reservation, database, outbox) once.
+
+    A freshly started stack is cold (class loading, JIT, first connections): the first orders take several seconds.
+    A scenario that kills a service three seconds into its load would then kill it before any order has reached it,
+    and measure the cold start instead of the failure. Failures here are not asserted: they only mean 'not ready yet'.
+    """
+    pid = Fixture().new_product(orders * 2)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        statuses = list(pool.map(lambda _: place_order(pid).status, range(orders)))
+    log(f"warm-up: {orders} orders -> {sorted(set(statuses))}")
+
+
 def get_order(order_id):
     return http("GET", f"{URLS['order']}/api/v1/orders/{order_id}", timeout=10, token="admin")
 

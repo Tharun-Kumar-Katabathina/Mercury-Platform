@@ -69,9 +69,15 @@ def inventory_killed(stack, fx):
     assert failures, f"no request noticed the outage: {h}"
     assert slowest < 20, f"a failing request took {slowest:.1f}s: not bounded"
     assert set(h) <= {201, 409, 500, 502, 503}, f"unexpected statuses {h}"
+    # The circuit breaker may still be open (10 s) because its half-open probe can land while Inventory is still booting
+    # and fail; it closes again by itself. "Resumes" therefore means: within a bounded time, not in the same instant.
+    healthy_at = time.time()
     after = place_order(pid)
-    assert after.status == 201, f"order after restart -> {after.status} {after.body}"
-    return f"{h}; slowest failed request {slowest:.1f}s; new order after restart = 201"
+    while after.status != 201 and time.time() - healthy_at < 25:
+        time.sleep(1)
+        after = place_order(pid)
+    assert after.status == 201, f"no order succeeded within 25 s of Inventory being healthy: last {after.status} {after.body}"
+    return f"{h}; slowest failed request {slowest:.1f}s; first new order after restart = 201 after {time.time() - healthy_at:.1f}s"
 
 
 @scenario("F02", "Order Service killed (SIGKILL) mid-saga under load", "SYNC",

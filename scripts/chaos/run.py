@@ -12,7 +12,7 @@ import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(__file__))
-from lib import ROOT, Fixture, Stack, check_invariants, log  # noqa: E402
+from lib import ROOT, Fixture, Stack, check_invariants, log, warm_up  # noqa: E402
 from scenarios import SCENARIOS  # noqa: E402
 
 
@@ -27,6 +27,7 @@ def main(argv):
     try:
         log("starting the platform (chaos tuning)")
         stack.up(build=build)
+        warm_up()
         groups = []                                           # (mode, deadline) in order of first appearance, SYNC first
         for sc in sorted(chosen, key=lambda s: s["mode"] != "SYNC"):
             key = (sc["mode"], sc["deadline"] if sc["mode"] == "ASYNC" else "12s")
