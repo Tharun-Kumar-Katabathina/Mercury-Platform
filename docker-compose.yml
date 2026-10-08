@@ -45,6 +45,9 @@ services:
   postgres:
     image: postgres:17
     restart: unless-stopped
+    read_only: true                      # writes only to the data volume and the socket directory below (same as the Kubernetes pod)
+    tmpfs:
+      - /var/run/postgresql:uid=999,gid=999,mode=3777
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-mercury}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
@@ -68,7 +71,12 @@ services:
     # Single-node Kafka in KRaft mode (no ZooKeeper). Inside the network: kafka:29092.
     image: apache/kafka:3.9.0
     restart: unless-stopped
+    read_only: true                      # writes only to the data volume, the broker config rendered at start-up, and /tmp
+    tmpfs:
+      - /opt/kafka/config:uid=1000,gid=1000,mode=0755
+      - /tmp:uid=1000,gid=1000,mode=0755,size=256m
     environment:
+      LOG_DIR: /tmp/kafka-logs           # kafka-run-class.sh would create /opt/kafka/logs on the read-only image
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:9093
@@ -100,6 +108,12 @@ services:
     # Vector database for the recommendation service (Phase 16).
     image: qdrant/qdrant:v1.19.1
     restart: unless-stopped
+    read_only: true                      # collections on the volume; snapshots, the init marker and /tmp are scratch
+    tmpfs:
+      - /qdrant/snapshots:mode=1777,size=256m
+      - /tmp:mode=1777,size=16m
+    environment:
+      QDRANT_INIT_FILE_PATH: /tmp/.qdrant-initialized
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:

@@ -36,6 +36,10 @@ spec:
           ports:
             - { name: http, containerPort: 6333 }
             - { name: grpc, containerPort: 6334 }
+          env:
+            # Qdrant writes this marker after start-up (used only by its optional OOM recovery mode, which is off): the working
+            # directory is read-only, so it goes to the scratch volume
+            - { name: QDRANT_INIT_FILE_PATH, value: /tmp/.qdrant-initialized }
           resources:
             requests: { cpu: 100m, memory: 192Mi }
             limits:   { cpu: "1", memory: 512Mi }
@@ -48,9 +52,18 @@ spec:
             failureThreshold: 6
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities: { drop: [ALL] }
+          # collections live on the volume; snapshots taken through the API are scratch (the index is rebuilt from order events)
           volumeMounts:
             - { name: storage, mountPath: /qdrant/storage }
+            - { name: snapshots, mountPath: /qdrant/snapshots }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: snapshots
+          emptyDir: { sizeLimit: 256Mi }
+        - name: tmp
+          emptyDir: { sizeLimit: 16Mi }
   volumeClaimTemplates:
     - metadata: { name: storage }
       spec:

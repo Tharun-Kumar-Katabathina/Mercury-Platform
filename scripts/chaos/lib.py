@@ -57,7 +57,14 @@ class Stack:
                 "--profile", "platform"]
         return sh(base + list(args), env=env, **kw)
 
+    def build_netem(self, force):
+        """The helper image for packet loss and latency (scripts/chaos/Dockerfile.netem): built here, because nothing else builds it."""
+        present = sh(["docker", "image", "inspect", "mercury/netem"], check=False).returncode == 0
+        if force or not present:
+            sh(["docker", "build", "-q", "-t", "mercury/netem", "-f", "scripts/chaos/Dockerfile.netem", "scripts/chaos"], timeout=600)
+
     def up(self, build=True):
+        self.build_netem(force=build)
         self._compose("up", "-d", *(["--build"] if build else []), timeout=900)
         self.wait_healthy()
 

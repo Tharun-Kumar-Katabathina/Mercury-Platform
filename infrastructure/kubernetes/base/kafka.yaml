@@ -53,6 +53,7 @@ spec:
             - { name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR, value: "1" }
             - { name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS, value: "0" }
             - { name: KAFKA_HEAP_OPTS, value: "-Xms256m -Xmx384m" }
+            - { name: LOG_DIR, value: /tmp/kafka-logs }            # kafka-run-class.sh would create /opt/kafka/logs on the (read-only) image
             - name: POD_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
           resources:
@@ -71,9 +72,19 @@ spec:
             failureThreshold: 6
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities: { drop: [ALL] }
+          # the only writable paths: the log data, the broker config the image renders from the environment at start-up
+          # (/etc/kafka/docker/configure refuses to start unless /opt/kafka/config is writable), and scratch space
           volumeMounts:
             - { name: data, mountPath: /var/lib/kafka/data }
+            - { name: config, mountPath: /opt/kafka/config }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: config
+          emptyDir: { sizeLimit: 16Mi }
+        - name: tmp
+          emptyDir: { sizeLimit: 256Mi }
   volumeClaimTemplates:
     - metadata: { name: data }
       spec:

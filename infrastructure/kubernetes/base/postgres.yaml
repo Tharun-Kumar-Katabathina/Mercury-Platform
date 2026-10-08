@@ -53,6 +53,7 @@ spec:
             failureThreshold: 6
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true               # writes only to: the data volume, the socket directory below (sorts and temp tables spill into PGDATA)
             capabilities: { drop: [ALL] }
           volumeMounts:
             - { name: data, mountPath: /var/lib/postgresql/data }
