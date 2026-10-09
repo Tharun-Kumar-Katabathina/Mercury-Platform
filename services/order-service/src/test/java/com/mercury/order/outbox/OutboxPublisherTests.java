@@ -3,18 +3,27 @@ package com.mercury.order.outbox;
 import com.mercury.order.event.OrderConfirmedEvent;
 import com.mercury.order.event.OrderCreatedEvent;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -38,6 +47,59 @@ import static org.mockito.Mockito.*;
 })
 class OutboxPublisherTests {
 
+    /** the first backoff of a failed event; the same 50ms as order.outbox.initial-backoff above */
+    private static final Duration BACKOFF = Duration.ofMillis(50);
+
+    /**
+     * The system clock, which a test can stop. A test that is about WHEN an event may be retried must not depend on
+     * how long its own assertions take: on a slow machine they can outlast the whole backoff.
+     */
+    static final class ControllableClock extends Clock {
+
+        private volatile Instant frozenAt;
+
+        /** @return the instant it now shows, cut to the microseconds the database keeps */
+        Instant freeze() {
+            frozenAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
+            return frozenAt;
+        }
+
+        void advance(Duration by) {
+            frozenAt = frozenAt.plus(by);
+        }
+
+        void release() {
+            frozenAt = null;
+        }
+
+        @Override
+        public Instant instant() {
+            Instant frozen = frozenAt;
+            return frozen != null ? frozen : Instant.now();
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class ClockConfiguration {
+
+        @Bean
+        @Primary
+        ControllableClock controllableClock() {
+            return new ControllableClock();
+        }
+    }
+
+    @Autowired private ControllableClock clock;
     @Autowired private OutboxPublisher publisher;
     @Autowired private OutboxWriter writer;
     @Autowired private OutboxRepository outbox;
@@ -50,6 +112,11 @@ class OutboxPublisherTests {
     @BeforeEach
     void emptyOutbox() {
         outbox.deleteAll();
+    }
+
+    @AfterEach
+    void letTimeRunAgain() {
+        clock.release();
     }
 
     private UUID eventFor(UUID orderId, boolean created) {
@@ -104,6 +171,7 @@ class OutboxPublisherTests {
 
     @Test
     void whenKafkaIsDownTheEventSurvivesAndIsRetriedWithBackoff() throws Exception {
+        Instant failedAt = clock.freeze();                                 // time moves only when this test moves it
         UUID created = eventFor(UUID.randomUUID(), true);
         doThrow(new java.util.concurrent.TimeoutException("broker not reachable")).when(sender).send(any());
         double failedBefore = counter("events.publish.failed");
@@ -114,16 +182,18 @@ class OutboxPublisherTests {
         assertThat(failed.getPublishedAt()).isNull();                      // still there, not lost
         assertThat(failed.getAttemptCount()).isEqualTo(1);
         assertThat(failed.getLastError()).contains("broker not reachable");
-        assertThat(failed.getNextAttemptAt()).isAfter(Instant.now().minusSeconds(1));
+        assertThat(failed.getNextAttemptAt()).isEqualTo(failedAt.plus(BACKOFF));
         assertThat(counter("events.publish.failed")).isEqualTo(failedBefore + 1);
 
-        // not retried before its backoff has elapsed
+        // not retried before its backoff has elapsed: not right away, and not a microsecond before the end of it
+        assertThat(publisher.publishDue()).isZero();
+        clock.advance(BACKOFF.minus(1, ChronoUnit.MICROS));
         assertThat(publisher.publishDue()).isZero();
         verify(sender, times(1)).send(any());
 
-        // Kafka returns
+        // Kafka returns, and the backoff is over
         doNothing().when(sender).send(any());
-        Thread.sleep(120);
+        clock.advance(Duration.of(1, ChronoUnit.MICROS));
         assertThat(publisher.publishDue()).isEqualTo(1);
         assertThat(row(created).getPublishedAt()).isNotNull();
     }
