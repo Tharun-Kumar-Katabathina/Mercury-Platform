@@ -140,12 +140,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Vulnerable dependencies and insecure configuration (Trivy filesystem scan)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
           scanners: vuln,misconfig
           severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true     # without this the SARIF format reports (and fails on) every severity
           ignore-unfixed: true
           exit-code: "1"
           format: sarif
@@ -193,10 +194,11 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
       - name: Scan the image (operating system and libraries)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: mercury/${{ matrix.service }}:ci
           severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true     # without this the SARIF format reports (and fails on) every severity
           ignore-unfixed: true
           exit-code: "1"
           format: sarif
