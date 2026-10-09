@@ -182,6 +182,9 @@ def main():
     check(g, "a non-UUID id", "400", s == 400, s)
     s, b, _ = req("POST", f"{GATEWAY}/api/v1/orders", raw=b"x" * 2_000_000, token=alice, headers={"Idempotency-Key": "big"})
     check(g, "a 2 MB body", "413 (refused at the edge)", s == 413, s)
+    # a chunked body declares no length, so the edge counts it as it streams to the service: the same 413, the same cap
+    s, b, _ = req("POST", f"{GATEWAY}/api/v1/orders", raw=(b"x" * 65536 for _ in range(30)), token=alice, headers={"Idempotency-Key": "big-chunked"})
+    check(g, "a 2 MB chunked body", "413 (counted at the edge)", s == 413, s)
     s, _, _ = req("POST", f"{GATEWAY}/api/v1/orders", order_body, alice, {"Idempotency-Key": "k" * 300})
     check(g, "an over-long Idempotency-Key", "400", s == 400, s)
 

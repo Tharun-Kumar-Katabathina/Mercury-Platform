@@ -19,7 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
 /**
- * Tells the proxy whether a request really carries a body.
+ * Tells the proxy whether a request really carries a body, and keeps a chunked body within the size limit.
  * <p>
  * The proxy streams a request body to the service when {@code getInputStream().isFinished()} is false, and a stream only reports
  * that after it has been read to its end. A request with no body therefore looks like one with a body, and it is forwarded as an
@@ -27,13 +27,32 @@ import java.util.Objects;
  * subscriber), and the call then fails with a NullPointerException, a few times in thousands under load.
  * <p>
  * HTTP/1.x says where a body is (RFC 9112 section 6.3), so this filter reads it from the request: no {@code Transfer-Encoding} and no
- * (or a zero) {@code Content-Length} is no body at all; a declared length is passed through untouched; a chunked request is empty only
+ * (or a zero) {@code Content-Length} is no body at all; a declared length is passed through untouched ({@link RequestSizeFilter}
+ * has already refused one over the limit, and the container reads no more than it declares); a chunked request is empty only
  * if its first read reaches the end, so that one byte is read here and handed on again, in front of the rest of the stream.
+ * <p>
+ * A chunked body declares no length, so {@link RequestSizeFilter} cannot see how large it is. The stream handed on counts the bytes
+ * as the proxy reads them and never hands out more than {@code maxBytes}: the first byte beyond them fails the read with a
+ * {@link BodyTooLargeException}, which aborts the call to the service (it has received the limit, never a complete request
+ * larger than it) and is answered here with the same 413 as a declared length. Nothing is buffered: the body still streams.
  * <p>
  * It runs after authentication, authorization and the rate limits, so a request those refuse is never read, and the read it does
  * is the one the proxy would make next, with the same container timeouts.
  */
 public class BodylessRequestFilter extends OncePerRequestFilter {
+
+    /** a chunked body went past the limit: the one read that would have returned its first excess byte fails with this */
+    static final class BodyTooLargeException extends IOException {
+        BodyTooLargeException(long maxBytes) {
+            super("The request body is larger than " + maxBytes + " bytes");
+        }
+    }
+
+    private final long maxBytes;
+
+    public BodylessRequestFilter(long maxBytes) {
+        this.maxBytes = maxBytes;
+    }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
@@ -46,7 +65,7 @@ public class BodylessRequestFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
         if (request.getHeader(HttpHeaders.TRANSFER_ENCODING) != null) {
-            chain.doFilter(afterTheFirstByte(request), response);
+            chunked(request, response, chain);
         } else if (request.getContentLengthLong() > 0) {
             chain.doFilter(request, response);
         } else {
@@ -54,13 +73,33 @@ public class BodylessRequestFilter extends OncePerRequestFilter {
         }
     }
 
-    private static HttpServletRequest afterTheFirstByte(HttpServletRequest request) throws IOException {
+    private void chunked(HttpServletRequest request, HttpServletResponse response, FilterChain chain) throws ServletException, IOException {
         ServletInputStream in = request.getInputStream();
-        if (in.isFinished()) {
-            return new NoBody(request);
+        HttpServletRequest forwarded = in.isFinished() ? new NoBody(request) : afterTheFirstByte(request, in);
+        try {
+            chain.doFilter(forwarded, response);
+        } catch (ServletException | IOException | RuntimeException e) {
+            if (!causedByTooLargeBody(e) || response.isCommitted()) {
+                throw e;        // not ours, or the answer has already begun: nothing is left to say but to drop the connection
+            }
+            // the request body was not read to its end, so this connection cannot carry another request
+            response.setHeader(HttpHeaders.CONNECTION, "close");
+            RequestSizeFilter.refuse(response, maxBytes);
         }
+    }
+
+    private HttpServletRequest afterTheFirstByte(HttpServletRequest request, ServletInputStream in) throws IOException {
         int first = in.read();
-        return first == -1 ? new NoBody(request) : new PeekedBody(request, in, first);
+        return first == -1 ? new NoBody(request) : new LimitedBody(request, new Counted(in, first, maxBytes));
+    }
+
+    private static boolean causedByTooLargeBody(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof BodyTooLargeException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** A request that carries no body: its stream is finished from the start. */
@@ -84,14 +123,14 @@ public class BodylessRequestFilter extends OncePerRequestFilter {
         @Override public BufferedReader getReader() { return new BufferedReader(Reader.nullReader()); }
     }
 
-    /** A chunked request whose first byte has been read: that byte comes back first, then the rest of the container's stream. */
-    private static final class PeekedBody extends HttpServletRequestWrapper {
+    /** A chunked request with a body: its stream is the container's, with the byte read ahead put back and the size limit applied. */
+    private static final class LimitedBody extends HttpServletRequestWrapper {
 
         private final ServletInputStream stream;
 
-        PeekedBody(HttpServletRequest request, ServletInputStream rest, int first) {
+        LimitedBody(HttpServletRequest request, ServletInputStream stream) {
             super(request);
-            this.stream = new Peeked(rest, first);
+            this.stream = stream;
         }
 
         @Override public ServletInputStream getInputStream() { return stream; }
@@ -104,24 +143,40 @@ public class BodylessRequestFilter extends OncePerRequestFilter {
         }
     }
 
-    private static final class Peeked extends ServletInputStream {
+    /**
+     * The container's stream after its first byte was read ahead: that byte comes back first, then the rest. No more than
+     * {@code maxBytes} are ever handed out, the byte read ahead included.
+     */
+    private static final class Counted extends ServletInputStream {
 
         private final ServletInputStream rest;
+        private final long maxBytes;
         private int first;                       // the byte read ahead, or -1 once it has been handed on
+        private long handedOut;                  // never more than maxBytes, so maxBytes - handedOut cannot overflow
 
-        Peeked(ServletInputStream rest, int first) {
+        Counted(ServletInputStream rest, int first, long maxBytes) {
             this.rest = rest;
             this.first = first;
+            this.maxBytes = maxBytes;
+        }
+
+        private long room() {
+            return maxBytes - handedOut;
         }
 
         @Override
         public int read() throws IOException {
             if (first >= 0) {
                 int b = first;
+                countOne();
                 first = -1;
                 return b;
             }
-            return rest.read();
+            int b = rest.read();
+            if (b != -1) {
+                countOne();
+            }
+            return b;
         }
 
         @Override
@@ -132,13 +187,36 @@ public class BodylessRequestFilter extends OncePerRequestFilter {
             }
             if (first >= 0) {
                 b[off] = (byte) first;           // just that byte: a read may return less, and asking for more could wait for the client
+                countOne();
                 first = -1;
                 return 1;
             }
-            return rest.read(b, off, len);
+            if (room() <= 0) {
+                return rest.read() == -1 ? -1 : tooLarge();      // at the limit: only the end of the body may follow
+            }
+            int n = rest.read(b, off, (int) Math.min(len, room()));
+            if (n > 0) {
+                handedOut += n;
+            }
+            return n;
         }
 
-        @Override public int available() throws IOException { return (first >= 0 ? 1 : 0) + rest.available(); }
+        private void countOne() throws BodyTooLargeException {
+            if (room() <= 0) {
+                tooLarge();
+            }
+            handedOut++;
+        }
+
+        private int tooLarge() throws BodyTooLargeException {
+            throw new BodyTooLargeException(maxBytes);
+        }
+
+        @Override
+        public int available() throws IOException {
+            long pending = (first >= 0 ? 1L : 0L) + rest.available();
+            return (int) Math.min(pending, Math.max(room(), 0L));
+        }
 
         @Override public boolean isFinished() { return first < 0 && rest.isFinished(); }
 

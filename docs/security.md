@@ -80,7 +80,14 @@ closed until someone opens it on purpose. Security failures return the same JSON
 
 Spring Cloud Gateway (MVC). In order, for every request:
 
-1. **Body-size cap** (default 1 MB, by declared length) → `413` before anything is forwarded.
+1. **Body-size cap** (default 1 MB, `MAX_BODY_SIZE`; exactly the cap is allowed, the first byte beyond it is not) → `413`, in two ways:
+   a request that *declares* a larger `Content-Length` is refused here, first, before anything is read or forwarded. A *chunked* request
+   declares no length, so its bytes are counted as they stream to the service, at the point where the proxy would read them anyway:
+   after the rate limits, authentication and authorization (steps 2 to 6), so a request refused there is never read. The first byte
+   beyond the cap aborts the call to the service (which has received at most the cap, never a complete larger request) and the client
+   gets the same `413` with `Connection: close`. Nothing is buffered. If a response had already started by then nothing more could be
+   said and the connection would simply be dropped; with this proxy that does not arise, because its JDK HTTP client reads the
+   service's answer only after the whole request body has been sent (it does not use `Expect: 100-continue`).
 2. **Per-address rate limit** *before* authentication (default burst 200, 100/s; credential endpoints 20 per minute), so
    garbage tokens and password guessing cannot be hammered for free → `429` with `Retry-After`.
 3. **CORS**: no origin is allowed unless listed in `CORS_ALLOWED_ORIGINS`; credentials (cookies) are never allowed.
@@ -141,8 +148,8 @@ get up to N times the limit; a shared (Redis) limiter is the upgrade if exact gl
 - **Gateway** (13): authentication before routing, nothing reaches a service unauthenticated, inventory has no route, CORS, size cap, headers,
   per-address and per-user rate limits.
 - **Black-box suite against the running platform** (`scripts/security/run.py`, results in [security-results.md](security-results.md)):
-  45 checks through the gateway and directly against services, including a token with an edited payload and an original signature, an
-  expired token with a genuine signature, a 2 MB body, a 30-guess password burst, five identical orders and the same key from two customers.
+  46 checks through the gateway and directly against services, including a token with an edited payload and an original signature, an
+  expired token with a genuine signature, a 2 MB body (declared, and chunked), a 30-guess password burst, five identical orders and the same key from two customers.
 - **Chaos** (F18, F19): the user-service dying does not affect logged-in customers; a flood of forged tokens is refused without hurting real orders.
 
 ## 9. Not covered (known limitations)
@@ -153,6 +160,8 @@ get up to N times the limit; a shared (Redis) limiter is the upgrade if exact gl
 - No **refresh tokens**, no social login, no password reset or email verification, no MFA.
 - **Key rotation** is manual (replace the pair and restart); `kid` is in every token, but verifiers hold a single static public key.
 - The in-memory **rate limiter** is per instance (see section 4); the login lockout is shared.
+- The **body-size cap** counts bytes, not time: a client that sends an allowed-size body very slowly is held only by the container's
+  per-read timeout, not by a limit on the whole transfer.
 - Kafka messages are not signed; anything that can write to the broker can forge events. Broker authentication and ACLs belong to the
   infrastructure phase.
 - Authentication is **switched off for the load tests** (`SECURITY_ENABLED=false`), so the published performance numbers exclude token

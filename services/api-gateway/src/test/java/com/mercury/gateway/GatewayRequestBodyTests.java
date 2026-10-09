@@ -17,26 +17,34 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Random;
 
 import static com.mercury.gateway.security.TestTokens.bearer;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * What the gateway does with a request body, through a real port and the real servlet container (MockMvc has no container: its
  * streams never say a request is finished until they are read). The requests are written by hand, byte by byte, so that the
  * framing is exactly what these tests say it is: neither the JDK client nor any other has a say in it.
+ * <p>
+ * The size limit is 64 KB here. A declared length over it is refused before anything is read (GatewayEdgeTests); these tests are
+ * about a chunked body, which declares none.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "mercury.security.enabled=true",
         "gateway.rate-limit.ip-per-second=1000", "gateway.rate-limit.ip-burst=1000",
         "gateway.rate-limit.user-per-second=1000", "gateway.rate-limit.user-burst=1000",
         "gateway.rate-limit.auth-per-minute=1000",
+        "gateway.max-body-size=64KB",
         "server.tomcat.connection-timeout=2s"})
 class GatewayRequestBodyTests {
 
     static final StubDownstream DOWNSTREAM = new StubDownstream();
     private static final String CRLF = "\r\n";
+    private static final int LIMIT = 64 * 1024;
 
     @DynamicPropertySource
     static void wiring(DynamicPropertyRegistry registry) {
@@ -58,6 +66,7 @@ class GatewayRequestBodyTests {
     @BeforeEach
     void forgetEarlierCalls() {
         DOWNSTREAM.calls.clear();
+        DOWNSTREAM.aborted.clear();
     }
 
     // ---- requests that carry no body ---------------------------------------------------------------------------------
@@ -129,6 +138,88 @@ class GatewayRequestBodyTests {
         });
     }
 
+    // ---- a chunked body declares no length, so the limit is counted as it is read -------------------------------------------
+
+    @Test
+    void aChunkedBodyExactlyAtTheLimitReachesTheServiceByteForByte() throws Exception {
+        byte[] payload = binary(LIMIT, 4);
+        byte[] body = chunked(slice(payload, 0, 1), slice(payload, 1, 30_000), slice(payload, 30_001, LIMIT - 30_001));
+
+        Reply reply = send(request("POST", "Transfer-Encoding: chunked"), body);
+
+        assertThat(reply.status()).isEqualTo(200);
+        assertThat(DOWNSTREAM.calls).singleElement().satisfies(c -> assertThat(c.body()).isEqualTo(payload));
+        assertThat(DOWNSTREAM.aborted).isEmpty();
+    }
+
+    @Test
+    void aChunkedBodyOneByteOverTheLimitIsRefusedAndTheServiceGetsNoMoreThanTheLimit() throws Exception {
+        Reply reply = send(request("POST", "Transfer-Encoding: chunked"), chunked(binary(LIMIT + 1, 5)));
+
+        assertRefusedAsTooLarge(reply);
+        assertTheServiceWasCutOffAtTheLimit();
+    }
+
+    @Test
+    void aLimitCrossedInTheMiddleOfAChunkIsRefused() throws Exception {
+        // the second chunk starts at 30,000 and the limit falls 35,536 bytes into it
+        Reply reply = send(request("POST", "Transfer-Encoding: chunked"), chunked(binary(30_000, 6), binary(40_000, 7)));
+
+        assertRefusedAsTooLarge(reply);
+        assertTheServiceWasCutOffAtTheLimit();
+    }
+
+    @Test
+    void aSmallContentLengthDoesNotLetAChunkedBodyPastTheLimit() throws Exception {
+        // the container goes by the chunks and ignores the length: a check of the header alone would pass this one
+        Reply reply = send(request("POST", "Transfer-Encoding: chunked", "Content-Length: 10"), chunked(binary(LIMIT + 5_000, 8)));
+
+        assertRefusedAsTooLarge(reply);
+        assertTheServiceWasCutOffAtTheLimit();
+    }
+
+    @Test
+    void anOversizedChunkedRequestToTheLoginRouteIsRefused() throws Exception {
+        // the login route is public: nobody has to have a token to send a body to it
+        Reply reply = send(unauthenticated("POST", "/api/v1/auth/login", "Transfer-Encoding: chunked"), chunked(binary(LIMIT + 1_000, 9)));
+
+        assertRefusedAsTooLarge(reply);
+        assertTheServiceWasCutOffAtTheLimit();
+    }
+
+    @Test
+    void anOversizedChunkedRequestWithoutATokenIsRefusedAs401AndNoServiceIsCalled() throws Exception {
+        Reply reply = send(unauthenticated("POST", "/api/v1/orders/123", "Transfer-Encoding: chunked"), chunked(binary(LIMIT + 1_000, 10)));
+
+        assertThat(reply.status()).isEqualTo(401);
+        assertThat(DOWNSTREAM.calls).isEmpty();
+        assertThat(DOWNSTREAM.aborted).isEmpty();
+    }
+
+    @Test
+    void aSmallChunkedBodyIsStillForwardedByteForByte() throws Exception {
+        byte[] payload = binary(1_000, 11);
+
+        Reply reply = send(request("POST", "Transfer-Encoding: chunked"), chunked(slice(payload, 0, 1), slice(payload, 1, 999)));
+
+        assertThat(reply.status()).isEqualTo(200);
+        assertThat(DOWNSTREAM.calls).singleElement().satisfies(c -> assertThat(c.body()).isEqualTo(payload));
+    }
+
+    private void assertRefusedAsTooLarge(Reply reply) {
+        assertThat(reply.status()).isEqualTo(413);
+        assertThat(reply.header("content-type")).startsWith("application/json");
+        assertThat(reply.header("connection")).as("the request body was not read to its end: no second request on this connection").isEqualTo("close");
+        assertThat(reply.body()).contains("\"status\":413", "\"error\":\"PAYLOAD_TOO_LARGE\"", "larger than " + LIMIT + " bytes");
+    }
+
+    /** the service saw a request begin and was cut off, having received no more than the limit: it never got a complete oversized body */
+    private void assertTheServiceWasCutOffAtTheLimit() {
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(DOWNSTREAM.aborted).singleElement().satisfies(received -> assertThat(received).isPositive().isLessThanOrEqualTo(LIMIT)));
+        assertThat(DOWNSTREAM.calls).isEmpty();
+    }
+
     // ---- what the filter must not do ---------------------------------------------------------------------------------
 
     @Test
@@ -161,12 +252,26 @@ class GatewayRequestBodyTests {
 
     // ---- by-hand HTTP ------------------------------------------------------------------------------------------------
 
-    private record Reply(int status) { }
+    private record Reply(int status, Map<String, String> headers, String body) {
+        String header(String lowerCaseName) {
+            return headers.getOrDefault(lowerCaseName, "");
+        }
+    }
 
     /** the request line and headers of an authenticated call to the order service; the blank line that ends them is the caller's */
     private String request(String method, String... framing) {
         StringBuilder head = new StringBuilder(method + " /api/v1/orders/123 HTTP/1.1" + CRLF + "Host: gateway" + CRLF + "Connection: close" + CRLF
                 + "Authorization: " + token + CRLF + "Content-Type: application/octet-stream" + CRLF);
+        for (String header : framing) {
+            head.append(header).append(CRLF);
+        }
+        return head.toString();
+    }
+
+    /** like {@link #request}, to any path and without a token */
+    private String unauthenticated(String method, String path, String... framing) {
+        StringBuilder head = new StringBuilder(method + " " + path + " HTTP/1.1" + CRLF + "Host: gateway" + CRLF + "Connection: close" + CRLF
+                + "Content-Type: application/json" + CRLF);
         for (String header : framing) {
             head.append(header).append(CRLF);
         }
@@ -200,17 +305,40 @@ class GatewayRequestBodyTests {
     private Reply exchange(byte[] request, int readTimeoutMillis) throws IOException {
         try (Socket socket = new Socket("127.0.0.1", port)) {
             socket.setSoTimeout(readTimeoutMillis);
-            socket.getOutputStream().write(request);
-            socket.getOutputStream().flush();
+            try {
+                socket.getOutputStream().write(request);
+                socket.getOutputStream().flush();
+            } catch (IOException e) {
+                // the gateway may have answered, and closed, before the whole body was sent: what matters is the answer
+            }
             return read(socket);
         }
     }
 
     private static Reply read(Socket socket) throws IOException {
-        // the status line only: the container may keep the connection open after it, reading what the client never sent
-        String statusLine = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.ISO_8859_1)).readLine();
-        statusLine = statusLine == null ? "" : statusLine;
-        return new Reply(statusLine.startsWith("HTTP/1.1 ") ? Integer.parseInt(statusLine.split(" ")[1]) : -1);
+        BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.ISO_8859_1));
+        // the status line and headers, then the body as far as it is declared: the container may keep the connection open after
+        // that, reading what the client never sent, so this does not wait for the end of the stream
+        String statusLine = in.readLine();
+        if (statusLine == null || !statusLine.startsWith("HTTP/1.1 ")) {
+            return new Reply(-1, Map.of(), "");
+        }
+        Map<String, String> headers = new HashMap<>();
+        for (String line = in.readLine(); line != null && !line.isEmpty(); line = in.readLine()) {
+            int colon = line.indexOf(':');
+            headers.put(line.substring(0, colon).toLowerCase(), line.substring(colon + 1).trim());
+        }
+        StringBuilder body = new StringBuilder();
+        int declared = Integer.parseInt(headers.getOrDefault("content-length", "0"));
+        char[] buffer = new char[1024];
+        while (body.length() < declared) {
+            int n = in.read(buffer, 0, Math.min(buffer.length, declared - body.length()));
+            if (n == -1) {
+                break;
+            }
+            body.append(buffer, 0, n);
+        }
+        return new Reply(Integer.parseInt(statusLine.split(" ")[1]), headers, body.toString());
     }
 
     private static byte[] binary(int length, long seed) {

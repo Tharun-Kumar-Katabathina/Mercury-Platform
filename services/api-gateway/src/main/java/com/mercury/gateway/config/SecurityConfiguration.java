@@ -61,6 +61,8 @@ public class SecurityConfiguration {
             HttpSecurity http, SecurityProperties security, GatewayProperties gateway, ObjectProvider<JwtDecoder> decoder)
             throws Exception {
 
+        long maxBody = gateway.maxBodySize().toBytes();
+
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(c -> { })                                              // uses the CorsConfigurationSource bean
@@ -70,9 +72,10 @@ public class SecurityConfiguration {
                         .referrerPolicy(r -> r.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER))
                         .frameOptions(f -> f.deny())
                         .httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31536000)))
-                .addFilterBefore(new RequestSizeFilter(gateway.maxBodySize().toBytes()), DisableEncodeUrlFilter.class)
-                // after authorization: a request that is refused is never read; see the class for why the proxy needs it
-                .addFilterAfter(new BodylessRequestFilter(), AuthorizationFilter.class);
+                .addFilterBefore(new RequestSizeFilter(maxBody), DisableEncodeUrlFilter.class)
+                // after authorization: a request that is refused is never read. It tells the proxy whether there is a body at all, and
+                // applies the same size limit to a chunked body (which declares no length); see the class
+                .addFilterAfter(new BodylessRequestFilter(maxBody), AuthorizationFilter.class);
 
         if (gateway.rateLimit().enabled()) {
             http.addFilterBefore(new RateLimitFilter.Address(gateway.rateLimit()), BearerTokenAuthenticationFilter.class)

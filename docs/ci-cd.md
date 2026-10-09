@@ -11,7 +11,7 @@ push / pull request
    ├─ static checks   shellcheck · Compose files valid · Kubernetes manifests render + validate (kubeconform) · workflows valid (actionlint)
    ├─ security scan   gitleaks (secrets, full history) · Trivy (dependencies + configuration) → findings in the Security tab
    ├─ images ×7       build (layer cache) → Trivy image scan (HIGH/CRITICAL with a fix fails the build) → push to GHCR on main (tag = commit SHA)
-   └─ platform        compose up → authenticated smoke test → security suite (45 attacks) → performance smoke (100 users, hard thresholds)
+   └─ platform        compose up → authenticated smoke test → security suite (46 attacks) → performance smoke (100 users, hard thresholds)
                                                                                       │
 main only ─────────────────────────────────────────────────────────────────────────────┴─> deploy to staging (protected environment) → rollout checks → automatic rollback
 nightly   ─ failure matrix (chaos) · baseline-vs-optimized load test
