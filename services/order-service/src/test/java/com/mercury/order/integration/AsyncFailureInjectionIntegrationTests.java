@@ -152,7 +152,10 @@ class AsyncFailureInjectionIntegrationTests {
     @Test
     void ifInventoryIsUnreachableWhenTheDeadlinePassesTheOrderIsNotCancelledOnAGuess() throws Exception {
         UUID product = productWithStock(10);
-        stack.startOrderProcess(stack.inventoryBaseUrl(), asyncOrder("2s", false));
+        // Replies ARE consumed here, unlike in the lookup-only test above. Whether the order ends up confirmed or timed out
+        // depends on who is first once Inventory is back, and a reservation that turns up after a timeout can only be found
+        // and given back by the consumer: without it nothing would ever learn about it and the stock would stay reserved.
+        stack.startOrderProcess(stack.inventoryBaseUrl(), asyncOrder("2s", true));
         stack.stopInventoryService();
 
         UUID orderId = idOf(place(product, 2));
@@ -166,16 +169,20 @@ class AsyncFailureInjectionIntegrationTests {
         // reserves and the reply (or the lookup) confirms the order, OR the lookup runs a moment before the
         // consumer has joined and Inventory has decided nothing yet, so the order times out and the
         // reservation that follows is released as a late reservation. What must hold either way: the order
-        // reaches a final state and no stock is stranded.
+        // reaches a final state and no stock is stranded. Both happen from run to run: the first lookup Inventory
+        // answers comes as it finishes starting, which is also when its consumer starts working.
         await().atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofMillis(250)).untilAsserted(() -> {
             String status = client.orderStatus(DB, orderId);
             if ("CONFIRMED".equals(status)) {
                 assertThat(client.stock(product)).isEqualTo(new Stock(8, 2));
+                assertThat(client.inventoryRecords(product, "RELEASE")).isZero();   // nothing to give back
             } else {
                 assertThat(status).isEqualTo("CANCELLED");
                 assertThat(client.cancelReason(DB, orderId)).contains("RESERVATION_TIMEOUT");
                 assertThat(client.sagaState(DB, orderId)).isEqualTo("CANCELLED");
-                assertThat(client.stock(product)).isEqualTo(new Stock(10, 0));     // the late reservation was given back
+                assertThat(client.stock(product)).isEqualTo(new Stock(10, 0));     // the late reservation was given back ...
+                // ... and it really was: before Inventory has decided anything the stock is 10/0 as well
+                assertThat(client.inventoryRecords(product, "RELEASE")).isEqualTo(1);
             }
         });
     }

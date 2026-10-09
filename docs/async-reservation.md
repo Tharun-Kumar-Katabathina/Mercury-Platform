@@ -178,6 +178,9 @@ PostgreSQL directly.
   the late reply is released through compensation (section 6), which is correct but leaves the stock held
   until that reply is consumed and the release runs. A fence ("Order cancelled this id: refuse the command")
   would close that window; it was deliberately deferred. The idempotent release remains the safety mechanism.
+- **The late reply must be consumed.** The release in section 6 starts from the late `InventoryReserved` reply. With
+  `ORDER_INBOUND_ENABLED=false` nothing consumes it, so a reservation that turns up after a `RESERVATION_TIMEOUT` stays held
+  at Inventory and only the deadline lookup is left; that switch is for tests that isolate the lookup, not for running Order.
 - Compensation after a late reservation releases per product with the existing release endpoint; Inventory's
   `order_reservations` row stays `RESERVED` (it records that the decision was made, not that it was undone).
 - A `RECOVERY_FAILED` ASYNC order that later receives `InventoryRejected` is left for a person; one that
