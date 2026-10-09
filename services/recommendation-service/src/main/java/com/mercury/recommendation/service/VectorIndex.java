@@ -5,9 +5,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -24,10 +26,13 @@ public class VectorIndex {
     private static final Logger log = LoggerFactory.getLogger(VectorIndex.class);
 
     private static final String DISTANCE = "Cosine";
+    /** between two looks at a collection that Qdrant cannot show yet: see {@link #confirmCreatedByAnother} */
+    private static final Duration CONFIRMATION_PAUSE = Duration.ofMillis(20);
 
     private final RestClient http;
     private final String collection;
     private final int dimensions;
+    private final Duration timeout;
     private final AtomicBoolean ready = new AtomicBoolean();
     /** the initialization that is under way, if any: whoever arrives meanwhile waits for it instead of starting another */
     private final AtomicReference<CompletableFuture<Void>> initializing = new AtomicReference<>();
@@ -36,6 +41,7 @@ public class VectorIndex {
         RecommendationProperties.Qdrant q = properties.qdrant();
         this.collection = q.collection();
         this.dimensions = q.dimensions();
+        this.timeout = q.timeout();
         var factory = new org.springframework.http.client.JdkClientHttpRequestFactory(
                 java.net.http.HttpClient.newBuilder().connectTimeout(q.timeout()).build());
         factory.setReadTimeout(q.timeout());
@@ -84,10 +90,6 @@ public class VectorIndex {
      * Another INSTANCE can create the collection between our check and our create; Qdrant then refuses ours with 409.
      * It refuses with 409 whatever the existing collection holds, so that answer alone proves nothing: it is taken as
      * success only once the collection is confirmed to be there with the vectors this service writes.
-     *
-     * For a few milliseconds after such a refusal Qdrant cannot show the collection that is still being created (it
-     * answers 500). That is not waited out here: the attempt fails with Qdrant's answer, like any other time the index
-     * cannot be reached, and the next call finds the collection.
      */
     private void initialize() {
         if (existsAsExpected()) {
@@ -99,10 +101,42 @@ public class VectorIndex {
                     .retrieve().toBodilessEntity();
             log.info("created the vector collection {} ({} dimensions, cosine)", collection, dimensions);
         } catch (HttpClientErrorException.Conflict refused) {
-            if (!existsAsExpected()) {
-                throw refused;
-            }
+            confirmCreatedByAnother(refused);
             log.info("the vector collection {} was created by another instance at the same moment", collection);
+        }
+    }
+
+    /**
+     * The look at the collection after Qdrant refused our create. For a few milliseconds Qdrant cannot show the
+     * collection the other instance is still creating, and answers 5xx. That answer, and only that one, is waited
+     * out: the look is repeated after a short pause, for no longer than one request to Qdrant may take, and when that
+     * time is up the last 5xx is thrown. Everything else ends it at once: the expected collection (success), one that
+     * holds other vectors, no collection at all (the refusal then stands), and any other error.
+     */
+    private void confirmCreatedByAnother(HttpClientErrorException.Conflict refused) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (true) {
+            try {
+                if (existsAsExpected()) {
+                    return;
+                }
+                throw refused;
+            } catch (HttpServerErrorException notShownYet) {
+                if (deadline - System.nanoTime() < CONFIRMATION_PAUSE.toNanos() || !paused()) {
+                    throw notShownYet;
+                }
+            }
+        }
+    }
+
+    /** @return false when the thread was interrupted instead of pausing */
+    private static boolean paused() {
+        try {
+            Thread.sleep(CONFIRMATION_PAUSE);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 

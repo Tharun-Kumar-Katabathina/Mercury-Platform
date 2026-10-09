@@ -33,8 +33,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Stream;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.IntSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -54,6 +54,8 @@ class VectorIndexInitializationTests {
 
     private static final int DIMENSIONS = 64;
     private static final float[] VECTOR = new float[DIMENSIONS];
+    /** what one request to Qdrant may take in production, which is also how long the loser of a race keeps looking */
+    private static final Duration QDRANT_TIMEOUT = Duration.ofSeconds(2);
 
     static {
         VECTOR[0] = 1;
@@ -67,10 +69,22 @@ class VectorIndexInitializationTests {
         return "products-" + UUID.randomUUID().toString().substring(0, 8);
     }
 
-    /** an index as one instance of the service would have it */
+    /** an index as one instance of the service would have it (with more patience than in production, for slow machines) */
     private static VectorIndex index(String url, String collection, int dimensions) {
+        return index(url, collection, dimensions, Duration.ofSeconds(10));
+    }
+
+    private static VectorIndex index(String url, String collection, int dimensions, Duration timeout) {
         return new VectorIndex(new RecommendationProperties(new RecommendationProperties.Qdrant(
-                url, collection, dimensions, Duration.ofSeconds(10), Duration.ofHours(1), 200), null, null, null));
+                url, collection, dimensions, timeout, Duration.ofHours(1), 200), null, null, null));
+    }
+
+    private static List<Throwable> failuresOf(Caller... callers) throws Exception {
+        List<Throwable> failures = new ArrayList<>();
+        for (Caller caller : callers) {
+            failures.add(caller.failure());
+        }
+        return failures.stream().filter(Objects::nonNull).toList();
     }
 
     @Test
@@ -115,6 +129,58 @@ class VectorIndexInitializationTests {
         }
     }
 
+    // ---- what the loser of a create race sees when it looks at the collection ------------------------------------
+
+    @Test
+    void aLoserThatLooksBeforeTheCollectionCanBeShownWaitsForItAndSucceeds() throws Exception {
+        String collection = newCollection();
+        try (Gate gate = new Gate(qdrant()).lettingCreatesThroughInGroupsOf(2).tellingTheLoser(500)) {
+            VectorIndex first = index(gate.url(), collection, DIMENSIONS);
+            VectorIndex second = index(gate.url(), collection, DIMENSIONS);
+
+            Caller a = Caller.of(first);
+            Caller b = Caller.of(second);
+
+            assertThat(failuresOf(a, b)).isEmpty();                                    // both, in the call that collided
+            assertThat(gate.createAnswers()).containsExactlyInAnyOrder(200, 409);
+            assertThat(gate.answersToTheLoser()).containsExactly(500, 200);            // refused, not shown yet, then shown
+            first.ensureCollection();                                                  // neither has anything left to ask
+            second.ensureCollection();
+            assertThat(gate.checks()).isEqualTo(4);
+            first.upsert(UUID.randomUUID(), VECTOR);
+            assertThat(second.indexedCount()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void theLoserKeepsLookingWhileQdrantCannotShowTheCollection() throws Exception {
+        String collection = newCollection();
+        try (Gate gate = new Gate(qdrant()).lettingCreatesThroughInGroupsOf(2).tellingTheLoser(500, 503, 502)) {
+            Caller a = Caller.of(index(gate.url(), collection, DIMENSIONS));
+            Caller b = Caller.of(index(gate.url(), collection, DIMENSIONS));
+
+            assertThat(failuresOf(a, b)).isEmpty();
+            assertThat(gate.answersToTheLoser()).containsExactly(500, 503, 502, 200);  // it stopped at the first real answer
+        }
+    }
+
+    @Test
+    void aLoserGivesUpWithQdrantsLastAnswerWhenTheCollectionIsNeverShown() throws Exception {
+        String collection = newCollection();
+        try (Gate gate = new Gate(qdrant()).lettingCreatesThroughInGroupsOf(2).tellingTheLoserForever(500, 503)) {
+            Caller a = Caller.of(index(gate.url(), collection, DIMENSIONS, QDRANT_TIMEOUT));
+            Caller b = Caller.of(index(gate.url(), collection, DIMENSIONS, QDRANT_TIMEOUT));
+
+            assertThat(failuresOf(a, b)).singleElement().isInstanceOf(HttpServerErrorException.class);
+            Caller loser = a.failure() != null ? a : b;
+            List<Integer> looks = gate.answersToTheLoser();
+            assertThat(looks).hasSizeBetween(2, 101);                                  // a pause apart, for as long as allowed, no longer
+            assertThat(((HttpServerErrorException) loser.failure()).getResponseBodyAsString())
+                    .contains("(answer " + looks.size() + ")");                        // the last one it got, not the first
+            assertThat(loser.took()).isBetween(QDRANT_TIMEOUT.minusMillis(100), QDRANT_TIMEOUT.plusMillis(1500));
+        }
+    }
+
     @Test
     void theLoserOfTheRaceDoesNotAcceptACollectionThatHoldsOtherVectors() throws Exception {
         String collection = newCollection();
@@ -122,43 +188,53 @@ class VectorIndexInitializationTests {
             Caller ours = Caller.of(index(gate.url(), collection, DIMENSIONS));
             Caller theirs = Caller.of(index(gate.url(), collection, 8));               // same name, other vectors
 
-            List<Throwable> failures = Stream.of(ours.failure(), theirs.failure()).filter(Objects::nonNull).toList();
+            List<Throwable> failures = failuresOf(ours, theirs);
 
             assertThat(gate.createAnswers()).containsExactlyInAnyOrder(200, 409);
             assertThat(failures).singleElement().isInstanceOf(IllegalStateException.class);   // whoever lost: the 409 was no proof
             assertThat(failures.get(0)).hasMessageContaining(collection);
-        }
-    }
-
-    @Test
-    void aLoserThatLooksBeforeTheCollectionCanBeShownFailsAndIsReadyTheNextTime() throws Exception {
-        String collection = newCollection();
-        try (Gate gate = new Gate(qdrant()).lettingCreatesThroughInGroupsOf(2).tellingTheLoserOnce(500)) {
-            VectorIndex first = index(gate.url(), collection, DIMENSIONS);
-            VectorIndex second = index(gate.url(), collection, DIMENSIONS);
-            Caller a = Caller.of(first);
-            Caller b = Caller.of(second);
-
-            List<Throwable> failures = Stream.of(a.failure(), b.failure()).filter(Objects::nonNull).toList();
-
-            assertThat(failures).singleElement().isInstanceOf(HttpServerErrorException.class);   // Qdrant's answer, not a guess that all is well
-            first.ensureCollection();                                                             // whichever of the two it was
-            second.ensureCollection();
-            first.upsert(UUID.randomUUID(), VECTOR);
-            assertThat(second.indexedCount()).isEqualTo(1);
+            assertThat(gate.answersToTheLoser()).containsExactly(200);                 // one look was enough to know
         }
     }
 
     @Test
     void aRefusedCreateStaysAnErrorWhenTheCollectionIsNotThereAfterAll() throws Exception {
         String collection = newCollection();
-        try (Gate gate = new Gate(qdrant()).lettingCreatesThroughInGroupsOf(2).tellingTheLoserOnce(404)) {
+        try (Gate gate = new Gate(qdrant()).lettingCreatesThroughInGroupsOf(2).tellingTheLoser(404)) {
             Caller a = Caller.of(index(gate.url(), collection, DIMENSIONS));
             Caller b = Caller.of(index(gate.url(), collection, DIMENSIONS));
 
-            List<Throwable> failures = Stream.of(a.failure(), b.failure()).filter(Objects::nonNull).toList();
+            assertThat(failuresOf(a, b)).singleElement().isInstanceOf(HttpClientErrorException.Conflict.class);
+            assertThat(gate.answersToTheLoser()).containsExactly(404);                 // it did not look again
+        }
+    }
 
-            assertThat(failures).singleElement().isInstanceOf(HttpClientErrorException.Conflict.class);
+    @Test
+    void anAnswerOtherThanNotShownYetIsNotWaitedOut() throws Exception {
+        String collection = newCollection();
+        try (Gate gate = new Gate(qdrant()).lettingCreatesThroughInGroupsOf(2).tellingTheLoser(403)) {
+            Caller a = Caller.of(index(gate.url(), collection, DIMENSIONS));
+            Caller b = Caller.of(index(gate.url(), collection, DIMENSIONS));
+
+            assertThat(failuresOf(a, b)).singleElement().isInstanceOf(HttpClientErrorException.Forbidden.class);
+            assertThat(gate.answersToTheLoser()).containsExactly(403);
+        }
+    }
+
+    // ---- without a race ------------------------------------------------------------------------------------------
+
+    @Test
+    void aFirstCheckThatFailsIsNotRepeated() throws Exception {
+        String collection = newCollection();
+        try (Gate gate = new Gate(qdrant()).tellingTheFirstCheck(500)) {
+            VectorIndex index = index(gate.url(), collection, DIMENSIONS);
+
+            assertThatThrownBy(index::ensureCollection).isInstanceOf(HttpServerErrorException.class);
+
+            assertThat(gate.checks()).isEqualTo(1);                    // the waiting belongs to a refused create, not to this check
+            assertThat(gate.createAnswers()).isEmpty();
+            index.ensureCollection();                                  // and the failure is not remembered
+            assertThat(gate.createAnswers()).containsExactly(200);
         }
     }
 
@@ -174,13 +250,21 @@ class VectorIndexInitializationTests {
     }
 
     /** one call of ensureCollection() on a thread of its own */
-    private record Caller(Thread thread, FutureTask<Void> call) {
+    private record Caller(Thread thread, FutureTask<Void> call, AtomicLong nanos) {
 
         static Caller of(VectorIndex index) {
-            FutureTask<Void> call = new FutureTask<>(index::ensureCollection, null);
+            AtomicLong nanos = new AtomicLong();
+            FutureTask<Void> call = new FutureTask<>(() -> {
+                long start = System.nanoTime();
+                try {
+                    index.ensureCollection();
+                } finally {
+                    nanos.set(System.nanoTime() - start);
+                }
+            }, null);
             Thread thread = new Thread(call, "initializer");
             thread.start();
-            return new Caller(thread, call);
+            return new Caller(thread, call, nanos);
         }
 
         /** @return what the call failed with, or null when it succeeded */
@@ -192,21 +276,30 @@ class VectorIndexInitializationTests {
                 return e.getCause();
             }
         }
+
+        /** how long the call took; ask after {@link #failure()} */
+        Duration took() {
+            return Duration.ofNanos(nanos.get());
+        }
     }
 
     /**
      * Passes every request on to Qdrant and the answer back, but can hold back the two requests the initialization is
-     * made of: the check whether the collection exists, and the create.
+     * made of (the check whether the collection exists, and the create) and can answer the checks itself.
      */
     private static final class Gate implements AutoCloseable {
+
+        private static final int PASS_ON = -1;
 
         private final String qdrant;
         private final HttpServer server;
         private final ExecutorService workers = Executors.newCachedThreadPool();
         private final HttpClient client = HttpClient.newHttpClient();
         private final List<Integer> createAnswers = new CopyOnWriteArrayList<>();
+        private final List<Integer> answersToTheLoser = new CopyOnWriteArrayList<>();
         private final AtomicInteger checks = new AtomicInteger();
-        private final AtomicReference<Integer> toldToTheLoser = new AtomicReference<>();
+        private final AtomicInteger toldAtTheFirstCheck = new AtomicInteger(PASS_ON);
+        private volatile IntSupplier toldToTheLoser = () -> PASS_ON;
         private volatile CountDownLatch createsToCollide = new CountDownLatch(0);
         private volatile CountDownLatch checksHeld = new CountDownLatch(0);
         private volatile boolean refused;
@@ -232,12 +325,26 @@ class VectorIndexInitializationTests {
         }
 
         /**
-         * What the caller whose create was refused gets to its next check, once: 500 is what Qdrant says while it cannot
-         * show the collection yet, 404 that there is none. Without this the check is passed on as soon as Qdrant can
-         * show the collection.
+         * What the caller whose create was refused gets to its next looks at the collection, one status per look: 5xx
+         * is what Qdrant says while it cannot show the collection yet, 404 that there is none. Once these are used up,
+         * and when nothing is given at all, a look is passed on as soon as Qdrant can show the collection.
          */
-        Gate tellingTheLoserOnce(int status) {
-            toldToTheLoser.set(status);
+        Gate tellingTheLoser(int... statuses) {
+            AtomicInteger next = new AtomicInteger();
+            toldToTheLoser = () -> next.get() < statuses.length ? statuses[next.getAndIncrement()] : PASS_ON;
+            return this;
+        }
+
+        /** the same, but these statuses over and over: the loser never gets to see the collection */
+        Gate tellingTheLoserForever(int... statuses) {
+            AtomicInteger next = new AtomicInteger();
+            toldToTheLoser = () -> statuses[next.getAndIncrement() % statuses.length];
+            return this;
+        }
+
+        /** the answer to the very first check, before any create */
+        Gate tellingTheFirstCheck(int status) {
+            toldAtTheFirstCheck.set(status);
             return this;
         }
 
@@ -253,6 +360,11 @@ class VectorIndexInitializationTests {
             return createAnswers;
         }
 
+        /** the status of every look the refused caller took at the collection, in order */
+        List<Integer> answersToTheLoser() {
+            return answersToTheLoser;
+        }
+
         int checks() {
             return checks.get();
         }
@@ -265,16 +377,20 @@ class VectorIndexInitializationTests {
                 boolean theCollectionItself = uri.getRawPath().matches("/collections/[^/]+");
                 boolean check = theCollectionItself && method.equals("GET");
                 boolean create = theCollectionItself && method.equals("PUT");
+                boolean fromTheLoser = check && refused;
                 if (check) {
                     checks.incrementAndGet();
                     await(checksHeld);
-                    if (refused) {                                      // the loser of the race is looking for the collection
-                        Integer told = toldToTheLoser.getAndSet(null);
-                        if (told != null) {
-                            String error = told == 404 ? "Not found: Collection doesn't exist!" : "Service internal error: 0 of 0 read operations failed";
-                            answer(exchange, told, ("{\"status\":{\"error\":\"" + error + "\"}}").getBytes(StandardCharsets.UTF_8));
-                            return;
+                    int told = fromTheLoser ? toldToTheLoser.getAsInt() : toldAtTheFirstCheck.getAndSet(PASS_ON);
+                    if (told != PASS_ON) {
+                        int answer = fromTheLoser ? answersToTheLoser.size() + 1 : 0;
+                        if (fromTheLoser) {
+                            answersToTheLoser.add(told);
                         }
+                        answer(exchange, told, ("{\"status\":{\"error\":\"" + said(told) + " (answer " + answer + ")\"}}").getBytes(StandardCharsets.UTF_8));
+                        return;
+                    }
+                    if (fromTheLoser) {
                         untilQdrantCanShow(uri);
                     }
                 }
@@ -289,11 +405,23 @@ class VectorIndexInitializationTests {
                     }
                     createAnswers.add(fromQdrant.statusCode());
                 }
+                if (fromTheLoser) {
+                    answersToTheLoser.add(fromQdrant.statusCode());
+                }
                 answer(exchange, fromQdrant.statusCode(), fromQdrant.body());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IOException(e);
             }
+        }
+
+        /** Qdrant's own words for the statuses the tests make up */
+        private static String said(int status) {
+            return switch (status) {
+                case 404 -> "Not found: Collection doesn't exist!";
+                case 403 -> "Forbidden";
+                default -> "Service internal error: 0 of 0 read operations failed";
+            };
         }
 
         private HttpResponse<byte[]> send(String method, URI uri, byte[] body) throws IOException, InterruptedException {
