@@ -112,6 +112,8 @@ class GatewayEdgeTests {
         assertThat(DOWNSTREAM.calls).singleElement().satisfies(c -> {
             assertThat(c.path()).isEqualTo("/api/v1/orders/123");
             assertThat(c.authorization()).isEqualTo(bearer(token));     // the service verifies it again: defence in depth
+            assertThat(c.transferEncoding()).isNull();                  // a call with no body is not forwarded as an (empty) chunked stream
+            assertThat(c.body()).isEmpty();
         });
     }
 

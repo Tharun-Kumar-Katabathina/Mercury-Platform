@@ -16,6 +16,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.security.web.session.DisableEncodeUrlFilter;
 import org.springframework.web.cors.CorsConfiguration;
@@ -69,7 +70,9 @@ public class SecurityConfiguration {
                         .referrerPolicy(r -> r.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER))
                         .frameOptions(f -> f.deny())
                         .httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31536000)))
-                .addFilterBefore(new RequestSizeFilter(gateway.maxBodySize().toBytes()), DisableEncodeUrlFilter.class);
+                .addFilterBefore(new RequestSizeFilter(gateway.maxBodySize().toBytes()), DisableEncodeUrlFilter.class)
+                // after authorization: a request that is refused is never read; see the class for why the proxy needs it
+                .addFilterAfter(new BodylessRequestFilter(), AuthorizationFilter.class);
 
         if (gateway.rateLimit().enabled()) {
             http.addFilterBefore(new RateLimitFilter.Address(gateway.rateLimit()), BearerTokenAuthenticationFilter.class)

@@ -8,10 +8,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-/** A tiny HTTP server that plays every downstream service: records what it was sent and answers 200. */
+/** A tiny HTTP server that plays every downstream service: records what it was sent (its Transfer-Encoding header and body included) and answers 200. */
 public final class StubDownstream implements AutoCloseable {
 
-    public record Call(String method, String path, String authorization) { }
+    /** {@code transferEncoding} is the header as received, null when absent; {@code body} is every byte of the request body */
+    public record Call(String method, String path, String authorization, String transferEncoding, byte[] body) { }
 
     private final HttpServer server;
     public final List<Call> calls = new CopyOnWriteArrayList<>();
@@ -23,8 +24,10 @@ public final class StubDownstream implements AutoCloseable {
             throw new IllegalStateException(e);
         }
         server.createContext("/", exchange -> {
+            byte[] received = exchange.getRequestBody().readAllBytes();
             calls.add(new Call(exchange.getRequestMethod(), exchange.getRequestURI().getPath(),
-                    exchange.getRequestHeaders().getFirst("Authorization")));
+                    exchange.getRequestHeaders().getFirst("Authorization"),
+                    exchange.getRequestHeaders().getFirst("Transfer-Encoding"), received));
             byte[] body = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, body.length);
