@@ -12,7 +12,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** The product vectors in Qdrant (REST API): create the collection once, upsert vectors, search the nearest. */
 @Component
@@ -20,10 +23,14 @@ public class VectorIndex {
 
     private static final Logger log = LoggerFactory.getLogger(VectorIndex.class);
 
+    private static final String DISTANCE = "Cosine";
+
     private final RestClient http;
     private final String collection;
     private final int dimensions;
     private final AtomicBoolean ready = new AtomicBoolean();
+    /** the initialization that is under way, if any: whoever arrives meanwhile waits for it instead of starting another */
+    private final AtomicReference<CompletableFuture<Void>> initializing = new AtomicReference<>();
 
     public VectorIndex(RecommendationProperties properties) {
         RecommendationProperties.Qdrant q = properties.qdrant();
@@ -37,20 +44,82 @@ public class VectorIndex {
 
     public record Match(UUID productId, double score) { }
 
-    /** Creates the collection if it is not there. Safe to call repeatedly; cheap once it succeeded. */
+    /**
+     * Creates the collection if it is not there. Safe to call repeatedly and from several threads at once; cheap once
+     * it succeeded.
+     *
+     * The sync and the first requests all arrive here together when the service starts. In this instance one of them
+     * does the work and the others wait for its outcome, success or failure, instead of each checking and creating on
+     * its own. A failure is not remembered: the next call tries again.
+     */
     public void ensureCollection() {
         if (ready.get()) {
             return;
         }
+        CompletableFuture<Void> mine = new CompletableFuture<>();
+        CompletableFuture<Void> underWay = initializing.compareAndExchange(null, mine);
+        if (underWay != null) {
+            try {
+                underWay.join();
+            } catch (CompletionException e) {
+                throw e.getCause() instanceof RuntimeException failure ? failure : e;
+            }
+            return;
+        }
         try {
-            http.get().uri("/collections/{c}", collection).retrieve().toBodilessEntity();
-        } catch (HttpClientErrorException.NotFound missing) {
+            if (!ready.get()) {                                     // it may have finished just before this turn was taken
+                initialize();
+                ready.set(true);
+            }
+            mine.complete(null);
+        } catch (Throwable e) {
+            mine.completeExceptionally(e);
+            throw e;
+        } finally {
+            initializing.compareAndSet(mine, null);
+        }
+    }
+
+    /**
+     * Another INSTANCE can create the collection between our check and our create; Qdrant then refuses ours with 409.
+     * It refuses with 409 whatever the existing collection holds, so that answer alone proves nothing: it is taken as
+     * success only once the collection is confirmed to be there with the vectors this service writes.
+     *
+     * For a few milliseconds after such a refusal Qdrant cannot show the collection that is still being created (it
+     * answers 500). That is not waited out here: the attempt fails with Qdrant's answer, like any other time the index
+     * cannot be reached, and the next call finds the collection.
+     */
+    private void initialize() {
+        if (existsAsExpected()) {
+            return;
+        }
+        try {
             http.put().uri("/collections/{c}", collection)
-                    .body(Map.of("vectors", Map.of("size", dimensions, "distance", "Cosine")))
+                    .body(Map.of("vectors", Map.of("size", dimensions, "distance", DISTANCE)))
                     .retrieve().toBodilessEntity();
             log.info("created the vector collection {} ({} dimensions, cosine)", collection, dimensions);
+        } catch (HttpClientErrorException.Conflict refused) {
+            if (!existsAsExpected()) {
+                throw refused;
+            }
+            log.info("the vector collection {} was created by another instance at the same moment", collection);
         }
-        ready.set(true);
+    }
+
+    /** @return false when there is no such collection; fails when there is one that holds other vectors than ours */
+    private boolean existsAsExpected() {
+        JsonNode vectors;
+        try {
+            vectors = http.get().uri("/collections/{c}", collection).retrieve().body(JsonNode.class)
+                    .path("result").path("config").path("params").path("vectors");
+        } catch (HttpClientErrorException.NotFound missing) {
+            return false;
+        }
+        if (vectors.path("size").asInt(-1) != dimensions || !DISTANCE.equalsIgnoreCase(vectors.path("distance").asString(""))) {
+            throw new IllegalStateException("the vector collection " + collection + " holds " + vectors
+                    + " but this service writes " + dimensions + "-dimensional " + DISTANCE + " vectors");
+        }
+        return true;
     }
 
     public void upsert(UUID productId, float[] vector) {

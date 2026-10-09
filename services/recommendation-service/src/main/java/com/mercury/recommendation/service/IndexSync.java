@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Pushes the vectors of products whose purchase profile changed into the index. The "dirty" flag lives in the same
@@ -27,6 +28,7 @@ public class IndexSync {
     private final RecommendationProperties properties;
     private final Counter synced;
     private final Counter failed;
+    private final ReentrantLock pass = new ReentrantLock();
 
     public IndexSync(FeatureStore store, EmbeddingService embeddings, VectorIndex index,
                      RecommendationProperties properties, MeterRegistry registry) {
@@ -43,8 +45,24 @@ public class IndexSync {
         runOnce();
     }
 
-    /** @return how many vectors were pushed */
+    /**
+     * One pass over the products whose vectors changed. Passes never overlap in this instance: a caller that arrives
+     * while one is running waits for it, then makes its own pass over what is left. So no product is pushed by two
+     * passes at once, and what a pass reports is what that pass pushed itself. (Another instance can still push the
+     * same product at the same moment; that is the harmless double upsert described above.)
+     *
+     * @return how many vectors this pass pushed
+     */
     public int runOnce() {
+        pass.lock();
+        try {
+            return pushDirty();
+        } finally {
+            pass.unlock();
+        }
+    }
+
+    private int pushDirty() {
         int pushed = 0;
         for (UUID product : store.dirtyProducts(properties.qdrant().syncBatch())) {
             try {

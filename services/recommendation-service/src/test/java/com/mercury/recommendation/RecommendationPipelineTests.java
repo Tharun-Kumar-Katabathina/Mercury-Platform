@@ -5,9 +5,11 @@ import com.mercury.recommendation.service.FeatureStore;
 import com.mercury.recommendation.service.IndexSync;
 import com.mercury.recommendation.service.RecommendationService;
 import com.mercury.recommendation.service.VectorIndex;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.scheduling.config.ScheduledTaskHolder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
@@ -44,6 +46,13 @@ class RecommendationPipelineTests {
     @Autowired private IndexSync sync;
     @Autowired private VectorIndex index;
     @Autowired private RecommendationService recommendations;
+    @Autowired private ScheduledTaskHolder scheduler;
+
+    /** These tests count what THEIR OWN pass pushed, so none of them starts while the scheduler's first pass could still take that work. */
+    @BeforeEach
+    void afterTheStartupSync() {
+        Waiting.untilTheStartupSyncIsOver(scheduler);
+    }
 
     /** two phone cases bought with the same accessories, and an unrelated product bought with other things */
     private record Catalogue(UUID caseA, UUID caseB, UUID charger, UUID cable, UUID screenProtector, UUID kettle, UUID toaster) {
