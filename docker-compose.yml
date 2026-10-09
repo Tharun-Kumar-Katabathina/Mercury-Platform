@@ -259,6 +259,11 @@ services:
       SERVICE_CLIENTS: order-service:${ORDER_SERVICE_SECRET:-},product-service:${PRODUCT_SERVICE_SECRET:-}
       JWT_USER_TTL: ${JWT_USER_TTL:-15m}
     secrets: [jwt_private, jwt_public]
+    # A file secret keeps the owner, group and mode of the file on the host (compose ignores the uid/gid/mode options for files).
+    # The private key is mode 640, owned by whoever ran scripts/init-secrets.sh, while this container runs as 10001:10001, so on
+    # Linux it could not read it. It is given the key's own group (recorded in .env by scripts/init-secrets.sh): read access for
+    # that group, none for anyone else, and no root. Without the variable the default is the container's own group, which adds nothing.
+    group_add: ["${JWT_PRIVATE_KEY_GID:-10001}"]
     depends_on:
       postgres: { condition: service_healthy }
     ports: ["127.0.0.1:8085:8085"]

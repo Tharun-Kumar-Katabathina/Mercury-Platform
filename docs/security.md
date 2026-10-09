@@ -35,6 +35,10 @@ client id and secret, cached, and renewed shortly before they expire.
 - Key pair generation: `scripts/generate-jwt-keys.sh` (written to the git-ignored `.secrets/`, mounted as Docker/Kubernetes
   secrets). The user-service refuses to start without keys (`JWT_REQUIRE_KEYS=true`); a throw-away pair is only generated
   when that is explicitly switched off for local development.
+- Who can read the private key in the container: it is mode 640 on the host and the service runs as uid/gid 10001, so on Linux
+  (where a compose file secret keeps the host file's owner and group) the user-service container is given the key's own group
+  (`group_add`, from `JWT_PRIVATE_KEY_GID` in `.env`). Read access for that group, none for any other identity, no root.
+  `scripts/jwt-key-access-check.sh` verifies this on a real Linux file system. Kubernetes does the same with `fsGroup` and mode 0440.
 - `GET /.well-known/jwks.json` publishes the public key (never the private one).
 
 ## 3. Who may do what

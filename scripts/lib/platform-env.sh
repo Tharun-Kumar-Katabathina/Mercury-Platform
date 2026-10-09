@@ -19,4 +19,5 @@ if [[ ! -s $state ]]; then
     } > "$state" )
 fi
 "$root/scripts/generate-jwt-keys.sh" >/dev/null
-sed 's/^/export /' "$state"
+# the group that owns the private key (the user-service container joins it, see docker-compose.yml)
+{ cat "$state"; echo "JWT_PRIVATE_KEY_GID=$("$root/scripts/lib/file-gid.sh" "$root/.secrets/jwt-private.pem")"; } | sed 's/^/export /'

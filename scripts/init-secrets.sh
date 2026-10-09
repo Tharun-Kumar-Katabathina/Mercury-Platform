@@ -27,3 +27,13 @@ ENV
   echo "wrote .env (admin login: admin@mercury.local, password inside .env)"
 fi
 scripts/generate-jwt-keys.sh
+
+# The private key is mode 640 and stays owned by whoever runs this script. The user-service runs as uid/gid 10001, which on
+# Linux is neither that owner nor in the file's group, so compose gives that one container the key's own group as well
+# (group_add in docker-compose.yml). Docker Desktop on macOS hides the problem, a Linux host does not. Recorded in .env, also
+# when .env already existed.
+gid="$(scripts/lib/file-gid.sh .secrets/jwt-private.pem)"
+( umask 077
+  { grep -v '^JWT_PRIVATE_KEY_GID=' .env || true; echo "JWT_PRIVATE_KEY_GID=$gid"; } > .env.tmp )
+mv .env.tmp .env
+echo "the user-service will read .secrets/jwt-private.pem through its group ($gid)"

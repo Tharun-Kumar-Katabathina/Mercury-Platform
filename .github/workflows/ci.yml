@@ -102,6 +102,8 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile platform config -q
           docker compose -f docker-compose.yml -f docker-compose.chaos.yml --profile platform config -q
           docker compose -f docker-compose.yml -f docker-compose.observability.yml -f docker-compose.perf.yml --profile platform config -q
+      - name: The user-service can read the JWT private key, and no other identity can
+        run: scripts/jwt-key-access-check.sh
       - name: Kubernetes manifests render and match the schemas
         run: |
           scripts/k8s-create-secrets.sh
