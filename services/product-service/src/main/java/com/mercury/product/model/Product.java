@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
+@EntityListeners(ProductTimestamps.class)
 @Table(name = "products", indexes = @Index(name = "idx_products_created_at_id", columnList = "createdAt, id"))
 public class Product {
 
@@ -31,16 +32,14 @@ public class Product {
     @Column(nullable = false)
     private Instant updatedAt;
 
-    @PrePersist
-    protected void onCreate() {
-        Instant now = Instant.now();
+    /** Only {@link ProductTimestamps} stamps a product, at the precision the columns keep. */
+    void stampCreated(Instant now) {
         createdAt = now;
         updatedAt = now;
     }
 
-    @PreUpdate
-    protected void onUpdate() {
-        updatedAt = Instant.now();
+    void stampUpdated(Instant now) {
+        updatedAt = now;
     }
 
     public UUID getId() {
