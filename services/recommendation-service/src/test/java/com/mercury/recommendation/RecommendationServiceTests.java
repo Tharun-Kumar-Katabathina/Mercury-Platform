@@ -5,9 +5,11 @@ import com.mercury.recommendation.service.FeatureStore;
 import com.mercury.recommendation.service.RecommendationService;
 import com.mercury.recommendation.service.VectorIndex;
 import com.mercury.recommendation.model.InteractionType;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.scheduling.config.ScheduledTaskHolder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Instant;
@@ -25,7 +27,20 @@ class RecommendationServiceTests {
 
     @Autowired private RecommendationService recommendations;
     @Autowired private FeatureStore store;
+    @Autowired private ScheduledTaskHolder scheduler;
     @MockitoBean private VectorIndex index;
+
+    /**
+     * The context's own first sync pass starts with the context and pushes whatever earlier tests left unindexed in the
+     * shared database, through the mock above. Mockito keeps "the call that is being stubbed" per mock, not per thread: a
+     * push that lands between a test's {@code index.similarTo(...)} and its {@code .thenReturn(...)} is the call that
+     * {@code thenReturn} then checks the answer against, and fails with "'upsert' is a void method". The first test to
+     * run stubs right after the context has started, so no test starts before that pass is over.
+     */
+    @BeforeEach
+    void afterTheStartupSync() {
+        Waiting.untilTheStartupSyncIsOver(scheduler);
+    }
 
     private static String user() {
         return "user-" + UUID.randomUUID();
