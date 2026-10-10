@@ -174,7 +174,8 @@ PostgreSQL directly.
 
 ## 11. Known limitations
 
-- **No Inventory-side cancellation fence.** Order cancels on a timeout and Inventory may reserve afterwards;
+- **No Inventory-side cancellation fence for ASYNC orders.** (The synchronous path has one since
+  `V6__fenced_reservations.sql`: [saga-recovery.md](saga-recovery.md#3-ambiguous-reservations).) Order cancels on a timeout and Inventory may reserve afterwards;
   the late reply is released through compensation (section 6), which is correct but leaves the stock held
   until that reply is consumed and the release runs. A fence ("Order cancelled this id: refuse the command")
   would close that window; it was deliberately deferred. The idempotent release remains the safety mechanism.

@@ -233,17 +233,18 @@ public class OrderSagaService {
         ReservationStatus status = item.status();
 
         if (status == ReservationStatus.RESERVING) {
-            // outcome unknown: ask Inventory whether a reservation exists under the item's key
+            // outcome unknown: settle the key at Inventory. It reports the reservation if one exists, otherwise it
+            // fences the key so a reserve still in flight (or retried) can never succeed after this cancel
             Optional<ReservationSnapshot> found;
             long started = System.nanoTime();
             try {
-                found = inventoryClient.findReservation(
+                found = inventoryClient.fenceReservation(
                         item.productId(), SagaKeys.reservation(orderId, item.productId()));
             } catch (RuntimeException e) {
-                logCallFailure(orderId, "LOOKUP", item.productId(), e, started);
+                logCallFailure(orderId, "FENCE", item.productId(), e, started);
                 return false;
             }
-            logCall(orderId, "LOOKUP", item.productId(), found.isPresent() ? "FOUND" : "NONE", started);
+            logCall(orderId, "FENCE", item.productId(), found.isPresent() ? "FOUND" : "FENCED", started);
             if (found.isEmpty()) {
                 transactions.markItem(orderId, item.productId(), ReservationStatus.NOT_RESERVED);
                 return true;

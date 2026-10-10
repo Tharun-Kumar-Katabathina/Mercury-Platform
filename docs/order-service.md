@@ -129,9 +129,10 @@ invents one. Deterministic keys, one per order and product:
 
 Because the keys are fixed for a given order, repeating either call is safe.
 
-A third call, `GET /api/v1/inventory/{productId}/reservations/{key}`, is read-only and exists for recovery:
-it says whether a reservation was made under a key, which is how an unknown reserve outcome (a lost response)
-is resolved without sending a second reserve. See [saga-recovery.md](saga-recovery.md#3-ambiguous-reservations).
+A third call, `GET /api/v1/inventory/{productId}/reservations/{key}`, is read-only: it says whether a reservation
+was made under a key. A fourth, `POST /api/v1/inventory/{productId}/reservations/{key}/fence`, is how compensation
+resolves an unknown reserve outcome (a lost or timed-out response) without sending a second reserve: it reports the
+reservation if one exists, otherwise it fences the key so a late reserve is refused (`409 RESERVATION_FENCED`). See [saga-recovery.md](saga-recovery.md#3-ambiguous-reservations).
 
 ### Inventory release endpoint (added for compensation)
 
