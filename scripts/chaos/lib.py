@@ -21,6 +21,8 @@ SERVICES = ["product-service", "inventory-service", "order-service", "notificati
 URLS = {"product": "http://localhost:8081", "inventory": "http://localhost:8082",
         "order": "http://localhost:8083", "notification": "http://localhost:8084", "user": "http://localhost:8085"}
 PG_USER = "mercury"
+# where the containers' logs are saved when a scenario fails (target/ is not tracked); emptied when a run starts
+DIAGNOSTICS = os.path.join(ROOT, "target", "chaos-diagnostics")
 
 
 def log(msg):
@@ -148,6 +150,39 @@ class Stack:
                 return
             time.sleep(2)
         raise RuntimeError(f"stack not healthy after {timeout}s: {bad}")
+
+    # ---- diagnostics ----------------------------------------------------------------------------
+    def save_logs(self, name):
+        """Save the log of every container of the stack, as it is now, under DIAGNOSTICS/<name>. Called at the moment a
+        scenario fails: a later scenario may recreate a container, and its log goes with it. Never raises: what failed
+        is the scenario, and that is what has to be reported."""
+        try:
+            folder = os.path.join(DIAGNOSTICS, name)
+            os.makedirs(folder, exist_ok=True)
+            ps = self._compose("ps", "-a", check=False, timeout=60)
+            with open(os.path.join(folder, "containers.txt"), "w") as f:
+                f.write(ps.stdout + ps.stderr)
+            for svc in self._compose("ps", "-a", "--services", check=False, timeout=60).stdout.split():
+                r = self._compose("logs", "--no-color", "--timestamps", svc, check=False, timeout=120)
+                with open(os.path.join(folder, f"{svc}.txt"), "w") as f:
+                    f.write(r.stdout + r.stderr)
+            log(f"saved the containers' logs in {folder}")
+        except Exception as e:
+            log(f"could not save the containers' logs: {e}")
+
+    def logged(self, svc, text, last=3):
+        """The last warnings and errors that a service logged about `text` (the time and the message, without the thread
+        and the logger), in one line, for an assertion message."""
+        try:
+            r = sh(["docker", "logs", container(svc)], check=False, timeout=60)
+            lines = []
+            for line in (r.stdout + r.stderr).splitlines():
+                if text in line and line.split()[1:2] in (["WARN"], ["ERROR"]):
+                    head, _, message = line.partition(" : ")
+                    lines.append(f"{head.split()[0]} {message}".strip()[:400])
+            return " ; ".join(lines[-last:]) or f"no warning or error about {text}"
+        except Exception as e:
+            return f"log not readable: {e}"
 
     # ---- data access -----------------------------------------------------------------------------
     def sql(self, db, query):

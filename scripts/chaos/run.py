@@ -7,12 +7,13 @@
   scripts/chaos/run.py --no-build      # reuse the images
 """
 import os
+import shutil
 import sys
 import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(__file__))
-from lib import ROOT, Fixture, Stack, check_invariants, log, warm_up  # noqa: E402
+from lib import DIAGNOSTICS, ROOT, Fixture, Stack, check_invariants, log, warm_up  # noqa: E402
 from scenarios import SCENARIOS  # noqa: E402
 
 
@@ -24,6 +25,7 @@ def main(argv):
     stack = Stack()
     results = []
     started = time.time()
+    shutil.rmtree(DIAGNOSTICS, ignore_errors=True)            # what is there afterwards is from this run
     try:
         log("starting the platform (chaos tuning)")
         stack.up(build=build)
@@ -37,6 +39,9 @@ def main(argv):
             stack.set_mode(mode, deadline)
             for sc in [s for s in chosen if s["mode"] == mode and (mode == "SYNC" or s["deadline"] == deadline)]:
                 results.append(run_one(stack, sc))
+    except Exception:                                         # the stack did not come up, or could not be healed
+        stack.save_logs("run")
+        raise
     finally:
         try:
             stack.heal_everything()
@@ -71,6 +76,8 @@ def run_one(stack, sc):
         ok, actual = False, f"ERROR: {type(e).__name__}: {e}"
         traceback.print_exc()
     finally:
+        if not ok:
+            stack.save_logs(sc["id"])                        # now: a later scenario may recreate a container
         try:
             stack.heal_everything()
         except Exception as e:

@@ -36,7 +36,8 @@ and one review, disallow force-push. The pipeline cannot enforce its own gates; 
 
 Two jobs too long for every pull request: the **failure matrix** (`scripts/chaos/run.py`, ~30 minutes: kills and freezes services,
 partitions the network, restarts Kafka and PostgreSQL, and checks the invariants in the databases) and the **baseline-vs-optimized load test**
-(`scripts/perf/run.py`). Their reports are attached to the run.
+(`scripts/perf/run.py`). Their reports are attached to the run. When a scenario of the failure matrix fails, the log of every container
+at that moment is attached too (`chaos-diagnostics`): the matrix says what failed, the logs say why.
 
 ## Supply chain and housekeeping
 

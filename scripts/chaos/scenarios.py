@@ -122,7 +122,8 @@ def notification_killed(stack, fx):
     stack.kill("notification-service")
     rs = [place_order(pid) for _ in range(5)]
     bad = [(r.status, r.body) for r in rs if r.status != 201]
-    assert not bad, f"orders must not depend on Notification, but: {histogram(rs)} {bad[:1]}"
+    assert not bad, (f"orders must not depend on Notification, but: {histogram(rs)} {bad[:1]}; "
+                     f"order-service logged: {stack.logged('order-service', pid)}")
     ids = order_ids(rs)
     time.sleep(4)
     assert notifications(stack, ids)[0] == 0, "notifications appeared while the service was down"

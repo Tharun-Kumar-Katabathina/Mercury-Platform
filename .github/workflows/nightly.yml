@@ -26,6 +26,14 @@ jobs:
         with:
           name: failure-matrix
           path: docs/failure-matrix.md
+      # the log of every container at the moment a scenario failed (nothing is there when all passed):
+      # the matrix says what failed, these say why
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chaos-diagnostics
+          path: target/chaos-diagnostics
+          if-no-files-found: ignore
 
   performance:
     name: baseline vs optimized

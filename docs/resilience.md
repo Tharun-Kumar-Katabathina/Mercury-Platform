@@ -29,6 +29,9 @@ python3 scripts/chaos/run.py              # everything (about 30 minutes); F01 F
 
 Each scenario also asserts its own expectation (for example "refused with 503 and nothing saved", "stayed PENDING, no guess").
 
+When a scenario fails, the log of every container is saved at that moment in `target/chaos-diagnostics/<scenario>/` (not tracked; the
+nightly run attaches it as `chaos-diagnostics`), before a later scenario can recreate a container and lose it.
+
 ## 2. The scenarios
 
 | # | Failure | What it demonstrates |
