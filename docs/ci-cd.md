@@ -39,6 +39,11 @@ partitions the network, restarts Kafka and PostgreSQL, and checks the invariants
 (`scripts/perf/run.py`). Their reports are attached to the run. When a scenario of the failure matrix fails, the log of every container
 at that moment is attached too (`chaos-diagnostics`): the matrix says what failed, the logs say why.
 
+Started by hand (Actions, "Run workflow"), the failure matrix takes two inputs: **scenarios** (for example `F03 F04`; empty runs all of
+them) and **repeat** (how many times to run them, each time on a freshly started stack, the images built once). The run fails if any pass
+fails, and the logs of every failed pass are kept (`chaos-diagnostics`, one folder for each pass). With scenarios given, the load test is
+skipped. This is how a scenario that fails now and then is measured, and how a fix for it is shown to hold, without a local Docker stack.
+
 ## Supply chain and housekeeping
 
 - Actions are pinned to major versions and kept current by Dependabot (`.github/dependabot.yml`), which also updates every Maven module and

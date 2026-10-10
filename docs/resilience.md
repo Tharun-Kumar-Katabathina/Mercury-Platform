@@ -32,6 +32,9 @@ Each scenario also asserts its own expectation (for example "refused with 503 an
 When a scenario fails, the log of every container is saved at that moment in `target/chaos-diagnostics/<scenario>/` (not tracked; the
 nightly run attaches it as `chaos-diagnostics`), before a later scenario can recreate a container and lose it.
 
+The same run can be started on GitHub for a few scenarios only, several times over (`nightly.yml`, inputs `scenarios` and `repeat`):
+see [ci-cd.md](ci-cd.md#nightly-nightlyyml). A name that is not a scenario stops the run instead of passing with nothing run.
+
 ## 2. The scenarios
 
 | # | Failure | What it demonstrates |

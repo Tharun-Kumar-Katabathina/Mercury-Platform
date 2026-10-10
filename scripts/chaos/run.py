@@ -22,6 +22,9 @@ def main(argv):
     build = "--no-build" not in argv
     wanted = [a for a in argv if a.startswith("F")]
     chosen = [s for s in SCENARIOS if not wanted or s["id"] in wanted]
+    unknown = sorted(set(wanted) - {s["id"] for s in SCENARIOS})
+    if unknown:                                               # a mistyped name must not be a run that passes with nothing run
+        sys.exit(f"no such scenario: {' '.join(unknown)}")
     stack = Stack()
     results = []
     started = time.time()

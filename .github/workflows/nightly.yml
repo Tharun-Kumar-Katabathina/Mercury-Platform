@@ -1,11 +1,22 @@
 # The long-running proofs, once a night (and on demand): the failure matrix and the load test.
 # They take far too long for every pull request, and they are what back the platform's resilience and performance claims.
 name: Nightly resilience and performance
+run-name: ${{ inputs.scenarios && format('failure matrix {0} x{1}', inputs.scenarios, inputs.repeat) || 'Nightly resilience and performance' }}
 
 on:
   schedule:
     - cron: "0 3 * * *"
+  # On demand, a few scenarios can be run alone and several times over: how often does this one fail, and is it fixed?
   workflow_dispatch:
+    inputs:
+      scenarios:
+        description: 'Scenarios of the failure matrix, separated by spaces (for example "F03 F04"). Empty: all of them, and the load test.'
+        type: string
+        default: ""
+      repeat:
+        description: "How many times to run them, each time on a freshly started stack. The run fails if any pass fails."
+        type: number
+        default: 1
 
 permissions:
   contents: read
@@ -20,23 +31,49 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - run: scripts/init-secrets.sh
       - name: Inject the failures and check the invariants
-        run: set -a && . ./.env && set +a && python3 scripts/chaos/run.py
+        env:
+          SCENARIOS: ${{ inputs.scenarios }}
+          REPEAT: ${{ inputs.repeat || 1 }}
+        run: |
+          one_or_more='^(F[0-9]{2}( +F[0-9]{2})*)?$'
+          [[ "$SCENARIOS" =~ $one_or_more ]] || { echo "::error::scenarios must look like \"F03 F04\", got: $SCENARIOS"; exit 2; }
+          [[ "$REPEAT" =~ ^[1-9][0-9]?$ ]] || { echo "::error::repeat must be a number from 1 to 99, got: $REPEAT"; exit 2; }
+          read -r -a arguments <<< "$SCENARIOS"
+          set -a && . ./.env && set +a
+          failed=()
+          images=()
+          for pass in $(seq 1 "$REPEAT"); do
+            echo "::group::pass $pass of $REPEAT"
+            python3 scripts/chaos/run.py "${arguments[@]}" "${images[@]}" || failed+=("$pass")
+            echo "::endgroup::"
+            images=(--no-build)                                  # from here on, those of the first pass
+            # the next pass empties the folder: the logs this pass left are kept aside
+            if [ -d target/chaos-diagnostics ]; then
+              mkdir -p target/chaos-passes
+              mv target/chaos-diagnostics "target/chaos-passes/pass-$pass"
+            fi
+          done
+          echo "$((REPEAT - ${#failed[@]})) of $REPEAT passes passed${failed[*]:+; failed: pass ${failed[*]}}"
+          [ ${#failed[@]} -eq 0 ]
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: failure-matrix
           path: docs/failure-matrix.md
-      # the log of every container at the moment a scenario failed (nothing is there when all passed):
-      # the matrix says what failed, these say why
+      # the log of every container at the moment a scenario failed, one folder for each pass that failed (nothing is
+      # there when all passed): the matrix (of the last pass) and the job's log say what failed, these say why
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: chaos-diagnostics
-          path: target/chaos-diagnostics
+          path: |
+            target/chaos-passes
+            target/chaos-diagnostics
           if-no-files-found: ignore
 
   performance:
     name: baseline vs optimized
+    if: ${{ !inputs.scenarios }}          # a few scenarios on demand: the question is about them, not about the load
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
