@@ -182,7 +182,7 @@ jobs:
           - { service: api-gateway, port: 8090 }
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Build (and cache) the image
         uses: docker/build-push-action@v6
         with:
@@ -235,7 +235,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Generate throw-away secrets
         run: scripts/init-secrets.sh
       - name: Start the platform
