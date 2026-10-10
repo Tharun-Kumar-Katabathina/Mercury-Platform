@@ -1,6 +1,7 @@
 package com.mercury.inventory.service;
 
 import com.mercury.inventory.dto.CreateInventoryRequest;
+import com.mercury.inventory.dto.FenceResponse;
 import com.mercury.inventory.dto.InventoryResponse;
 import com.mercury.inventory.dto.ReleaseResponse;
 import com.mercury.inventory.dto.ReleaseResult;
@@ -12,6 +13,7 @@ import com.mercury.inventory.exception.IdempotencyKeyMismatchException;
 import com.mercury.inventory.exception.InsufficientReservedStockException;
 import com.mercury.inventory.exception.InsufficientStockException;
 import com.mercury.inventory.exception.InventoryNotFoundException;
+import com.mercury.inventory.exception.ReservationFencedException;
 import com.mercury.inventory.exception.ReservationNotFoundException;
 import com.mercury.inventory.model.IdempotencyOperation;
 import com.mercury.inventory.model.IdempotencyRecord;
@@ -117,6 +119,9 @@ public class InventoryService {
         } catch (InsufficientStockException e) {
             metrics.rejected("rest", "INSUFFICIENT_STOCK");
             throw e;
+        } catch (ReservationFencedException e) {
+            metrics.rejected("rest", "RESERVATION_FENCED");
+            throw e;
         }
         metrics.reserved("rest", result.replayed());
 
@@ -156,6 +161,56 @@ public class InventoryService {
                 .orElseThrow(() -> new ReservationNotFoundException(productId, idempotencyKey));
 
         return jsonMapper.readValue(record.getResponseBody(), ReservationResponse.class);
+    }
+
+    /**
+     * Settles the reservation key: returns the reservation if one exists, otherwise fences the key.
+     *
+     * Whoever commits a row under the unique idempotency key first wins. A reserve that is still in
+     * flight when the fence commits fails its own insert (unique violation), rolls back its stock
+     * change and is answered 409 RESERVATION_FENCED; a fence that loses to a committed reserve sees
+     * that reservation instead. Not @Transactional for the same reason as executeIdempotently.
+     */
+    public FenceResponse fenceReservation(UUID productId, String idempotencyKey) {
+
+        try {
+            return transactionTemplate.execute(status -> {
+                Optional<IdempotencyRecord> existing =
+                        idempotencyRecordRepository.findByIdempotencyKey(idempotencyKey);
+                if (existing.isPresent()) {
+                    return fenceOutcome(existing.get(), productId, idempotencyKey);
+                }
+                IdempotencyRecord tombstone = new IdempotencyRecord();
+                tombstone.setIdempotencyKey(idempotencyKey);
+                tombstone.setRequestHash("FENCED:" + productId);
+                tombstone.setOperation(IdempotencyOperation.FENCED);
+                tombstone.setProductId(productId);
+                tombstone.setResponseBody("{}");
+                idempotencyRecordRepository.saveAndFlush(tombstone);
+                return FenceResponse.fenced();
+            });
+        } catch (DataIntegrityViolationException e) {
+            // a concurrent reserve or fence committed under the key first: read what it left
+            FenceResponse winner = transactionTemplate.execute(status ->
+                    idempotencyRecordRepository.findByIdempotencyKey(idempotencyKey)
+                            .map(record -> fenceOutcome(record, productId, idempotencyKey))
+                            .orElse(null));
+            if (winner == null) {
+                throw e;
+            }
+            return winner;
+        }
+    }
+
+    private FenceResponse fenceOutcome(IdempotencyRecord record, UUID productId, String idempotencyKey) {
+
+        if (!record.getProductId().equals(productId) || record.getOperation() == IdempotencyOperation.RELEASE) {
+            throw new IdempotencyKeyMismatchException(idempotencyKey);
+        }
+        if (record.getOperation() == IdempotencyOperation.FENCED) {
+            return FenceResponse.fenced();
+        }
+        return FenceResponse.reserved(jsonMapper.readValue(record.getResponseBody(), ReservationResponse.class));
     }
 
     private record IdempotentResult<T>(T response, boolean replayed) {
@@ -260,6 +315,12 @@ public class InventoryService {
             String requestHash,
             Class<T> responseType) {
 
+        if (record.getOperation() == IdempotencyOperation.FENCED) {
+            if (responseType == ReservationResponse.class) {
+                throw new ReservationFencedException(record.getProductId());
+            }
+            throw new IdempotencyKeyMismatchException(idempotencyKey);   // a release can never use a fenced key
+        }
         if (!record.getRequestHash().equals(requestHash)) {
             throw new IdempotencyKeyMismatchException(idempotencyKey);
         }

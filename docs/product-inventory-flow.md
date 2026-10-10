@@ -43,6 +43,7 @@ On a replay the same body is returned with the extra response header
 | `PUT` | `/api/v1/inventory/{productId}` | Set `availableQuantity` |
 | `POST` | `/api/v1/inventory/{productId}/reserve` | Reserve stock; needs `Idempotency-Key` (required, not blank, max 255 characters) |
 | `GET` | `/api/v1/inventory/{productId}/reservations/{idempotencyKey}` | Read-only: the reservation made under that key, or `404 RESERVATION_NOT_FOUND` (used by Order Service recovery) |
+| `POST` | `/api/v1/inventory/{productId}/reservations/{idempotencyKey}/fence` | Settle a key for good: `{"status":"RESERVED","reservation":{...}}` if a reservation exists, else write a tombstone (`{"status":"FENCED"}`) after which `reserve` under that key returns `409 RESERVATION_FENCED`. Idempotent; used by Order Service compensation |
 | `POST` | `/api/v1/inventory/{productId}/release` | Give reserved stock back; same key rules; `409 INSUFFICIENT_RESERVED_STOCK` if more than reserved |
 
 The Inventory reserve response additionally contains `updatedAt`; Product Service ignores

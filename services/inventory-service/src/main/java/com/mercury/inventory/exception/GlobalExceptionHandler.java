@@ -57,6 +57,13 @@ public class GlobalExceptionHandler {
         return body(409, "INSUFFICIENT_RESERVED_STOCK", exception.getMessage());
     }
 
+    @ExceptionHandler(ReservationFencedException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public Map<String, Object> handleReservationFenced(ReservationFencedException exception) {
+
+        return body(409, "RESERVATION_FENCED", exception.getMessage());
+    }
+
     @ExceptionHandler(IdempotencyKeyMismatchException.class)
     @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
     public Map<String, Object> handleIdempotencyKeyMismatch(
