@@ -1,10 +1,13 @@
 package com.mercury.recommendation.security;
 
+import com.mercury.recommendation.Waiting;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.scheduling.config.ScheduledTaskHolder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -32,9 +35,22 @@ class SecurityApiTests {
     }
 
     @Autowired private MockMvc mvc;
+    @Autowired private ScheduledTaskHolder scheduler;
     @MockitoBean private com.mercury.recommendation.service.VectorIndex index;
 
     private final String product = UUID.randomUUID().toString();
+
+    /**
+     * The context's own first sync pass starts with the context and pushes whatever earlier tests left unindexed in the
+     * shared database, through the mock above. Mockito keeps "the call that is being stubbed" per mock, not per thread: a
+     * push that lands between the test's {@code index.similarTo(...)} and its {@code .thenReturn(...)} is the call that
+     * {@code thenReturn} then checks the answer against, and fails with "'upsert' is a void method". The first test to run
+     * is the one that stubs, right after the context has started, so no test starts before that pass is over.
+     */
+    @BeforeEach
+    void afterTheStartupSync() {
+        Waiting.untilTheStartupSyncIsOver(scheduler);
+    }
 
     @Test
     void popularProductsArePublicEverythingElseNeedsALogin() throws Exception {

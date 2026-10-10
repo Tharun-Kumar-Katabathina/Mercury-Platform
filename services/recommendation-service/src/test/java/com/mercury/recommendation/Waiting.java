@@ -11,7 +11,7 @@ import java.util.List;
 import static org.awaitility.Awaitility.await;
 
 /** Waiting for what another thread does, on a condition instead of on a sleep. */
-final class Waiting {
+public final class Waiting {
 
     private static final Duration PATIENCE = Duration.ofSeconds(30);
     private static final Duration LOOK_EVERY = Duration.ofMillis(10);
@@ -44,7 +44,7 @@ final class Waiting {
      * The scheduler starts one sync pass as soon as the context is up (the next one is an hour away in tests). A test
      * that drives passes itself, and counts what each of them pushed, starts once that one is over.
      */
-    static void untilTheStartupSyncIsOver(ScheduledTaskHolder scheduler) {
+    public static void untilTheStartupSyncIsOver(ScheduledTaskHolder scheduler) {
         String sync = IndexSync.class.getName() + ".run";
         await().pollInterval(LOOK_EVERY).atMost(PATIENCE).until(() -> {
             List<Status> passes = scheduler.getScheduledTasks().stream().map(ScheduledTask::getTask)
