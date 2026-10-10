@@ -48,6 +48,8 @@ public record RecommendationProperties(
 
     public record Kafka(
             @DefaultValue("mercury.order.events") String topic,
+            /** how many partitions the topic is declared with: the same number as in the Notification Service, which declares it too */
+            @DefaultValue("3") int topicPartitions,
             @DefaultValue("mercury.order.events.recommendation.dlq") String dlqTopic
     ) {
     }

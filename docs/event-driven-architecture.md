@@ -49,6 +49,12 @@ Consumer group: `notification-service`. Topic names, partition count and group a
 (`ORDER_OUTBOX_TOPIC`, `NOTIFICATION_TOPIC`, `NOTIFICATION_DLQ_TOPIC`, `NOTIFICATION_TOPIC_PARTITIONS`,
 `NOTIFICATION_CONSUMER_GROUP`). Each record also carries the Kafka headers `event-id` and `event-type`.
 
+**Who creates the topic.** Every service that consumes `mercury.order.events` declares it when it starts, before its consumer does:
+the Notification Service and the Recommendation Service (consumer group `recommendation-service`), both with the partition count of
+`NOTIFICATION_TOPIC_PARTITIONS`. A consumer must not be the first to ask for a topic it has not declared: the broker would create it
+with one partition, and a consumer that is already subscribed when the other partitions are added does not see them until its next
+metadata refresh, five minutes later.
+
 **Retry topic: not used, on purpose.** A separate retry topic would let a later event of the same order
 overtake an earlier one that is waiting to be retried. Retries therefore happen inside the consumer with
 bounded backoff (section 7), and only then does a record go to the dead-letter topic.
