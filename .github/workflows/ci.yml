@@ -28,7 +28,7 @@ jobs:
   # ------------------------------------------------------------------------------------------------ 1. build and unit tests
   unit-tests:
     name: unit tests (${{ matrix.service }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -58,7 +58,7 @@ jobs:
   integration-tests:
     name: real-stack integration tests
     needs: unit-tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -83,7 +83,7 @@ jobs:
   # ------------------------------------------------------------------------------------------------ 3. static checks
   static-checks:
     name: static checks (scripts, compose, kubernetes, workflows)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -128,7 +128,7 @@ jobs:
   # ------------------------------------------------------------------------------------------------ 4. security scans
   security-scan:
     name: dependency, secret and configuration scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -163,7 +163,7 @@ jobs:
   images:
     name: image (${{ matrix.service }})
     needs: unit-tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -231,7 +231,7 @@ jobs:
   platform:
     name: platform smoke, security and performance
     needs: [integration-tests, images]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -267,7 +267,7 @@ jobs:
     name: deploy to staging
     if: github.event_name == 'push' && github.ref_name == 'main' && vars.DEPLOY_ENABLED == 'true'
     needs: [platform, security-scan, static-checks]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: staging                      # protection rules (reviewers, wait timer) are configured on this environment
     concurrency:
