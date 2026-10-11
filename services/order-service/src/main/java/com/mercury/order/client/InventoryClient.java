@@ -81,26 +81,36 @@ public class InventoryClient {
     }
 
     /**
-     * Was a reservation made for this product under this key? Read-only. This is how a reserve call
-     * whose response was lost gets resolved: empty means Inventory holds nothing under the key.
+     * Settles a reservation whose outcome is unknown, for good. Inventory atomically either reports the
+     * reservation that exists under the key (the caller must release it) or fences the key, after which a
+     * reserve that is still in flight or retried is refused. Empty means FENCED: nothing is held and
+     * nothing ever will be under this key. Idempotent.
      */
-    public Optional<ReservationSnapshot> findReservation(UUID productId, String idempotencyKey) {
+    public Optional<ReservationSnapshot> fenceReservation(UUID productId, String idempotencyKey) {
         return guard.execute(() -> {
             try {
-                return Optional.ofNullable(restClient.get()
-                        .uri("/api/v1/inventory/{productId}/reservations/{key}", productId, idempotencyKey)
+                FenceSnapshot fence = restClient.post()
+                        .uri("/api/v1/inventory/{productId}/reservations/{key}/fence", productId, idempotencyKey)
                         .retrieve()
-                        .body(ReservationSnapshot.class));
-            } catch (InventoryServiceException e) {
-                if (e.getStatus().value() == 404 && e.getResponseBody() != null
-                        && e.getResponseBody().contains("RESERVATION_NOT_FOUND")) {
-                    return Optional.<ReservationSnapshot>empty();
+                        .body(FenceSnapshot.class);
+                if (fence == null || fence.status() == null) {
+                    throw new InventoryServiceException(HttpStatus.BAD_GATEWAY, "empty fence answer");
                 }
-                throw e;
+                return switch (fence.status()) {
+                    case "RESERVED" -> Optional.of(fence.reservation() == null
+                            ? new ReservationSnapshot(productId, null) : fence.reservation());
+                    case "FENCED" -> Optional.<ReservationSnapshot>empty();
+                    default -> throw new InventoryServiceException(HttpStatus.BAD_GATEWAY,
+                            "unknown fence status " + fence.status());
+                };
             } catch (ResourceAccessException e) {
                 throw new InventoryServiceException(HttpStatus.SERVICE_UNAVAILABLE, null, e);
             }
         }, InventoryClient::neverSent);
+    }
+
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    private record FenceSnapshot(String status, ReservationSnapshot reservation) {
     }
 
     /**

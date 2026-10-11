@@ -1,6 +1,7 @@
 package com.mercury.inventory.controller;
 
 import com.mercury.inventory.dto.CreateInventoryRequest;
+import com.mercury.inventory.dto.FenceResponse;
 import com.mercury.inventory.dto.InventoryResponse;
 import com.mercury.inventory.dto.ReleaseInventoryRequest;
 import com.mercury.inventory.dto.ReleaseResponse;
@@ -90,5 +91,18 @@ public class InventoryController {
             @PathVariable String idempotencyKey) {
 
         return inventoryService.findReservation(productId, idempotencyKey);
+    }
+
+    /**
+     * Settles a reservation key for good: if a reservation exists under it the answer is RESERVED (release it),
+     * otherwise a tombstone is written and every later reserve under the key is refused with 409
+     * RESERVATION_FENCED. Idempotent; atomic against a concurrent reserve.
+     */
+    @PostMapping("/{productId}/reservations/{idempotencyKey}/fence")
+    public FenceResponse fenceReservation(
+            @PathVariable UUID productId,
+            @PathVariable String idempotencyKey) {
+
+        return inventoryService.fenceReservation(productId, idempotencyKey);
     }
 }
