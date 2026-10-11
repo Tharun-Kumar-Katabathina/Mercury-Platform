@@ -53,7 +53,7 @@ class OrderEventsTests {
     void inventoryAcceptsEverything() {
         when(inventoryClient.reserve(any(), anyInt(), anyString())).thenReturn(new InventoryOperationResult(false));
         when(inventoryClient.release(any(), anyInt(), anyString())).thenReturn(new InventoryOperationResult(false));
-        when(inventoryClient.findReservation(any(), anyString())).thenReturn(java.util.Optional.empty());
+        when(inventoryClient.fenceReservation(any(), anyString())).thenReturn(java.util.Optional.empty());
     }
 
     private UUID product(String name, String price) {

@@ -42,6 +42,8 @@ import static org.assertj.core.api.Assertions.assertThat;
         "order.recovery.initial-backoff=100ms",
         "order.recovery.max-backoff=500ms",
         "order.recovery.max-attempts=6",
+        // a bounded read timeout, so a reserve that is held in the fault proxy times out the way it does in production
+        "spring.http.clients.read-timeout=3s",
         // keep the circuit closed: this class injects many failures on purpose
         "order.resilience.inventory.sliding-window-size=1000",
         "order.resilience.inventory.minimum-calls=1000"
@@ -324,6 +326,61 @@ class SagaRecoveryIntegrationTests {
             stack.stopOrderProcess();
             client().cleanUp(processDb, product);
             products.remove(product);
+        }
+    }
+
+    // ---- E: a reserve still in flight when Order gives up -------------------------------------------
+
+    /**
+     * The stranded-reservation race, deterministic: a reserve is held inside the fault proxy BEFORE Inventory
+     * sees it, Order's read timeout expires and the saga compensates (it settles the key with Inventory, finds
+     * nothing reserved, marks the item NOT_RESERVED and cancels). Only then is the held request released.
+     * Inventory must refuse it: stock reserved for a CANCELLED order would never be given back.
+     * Before the fence existed this failed (RESERVE records=1, stock available=7 reserved=3).
+     * It lives in this class, not its own, so it reuses the Spring context (a further context would hold another
+     * connection pool against the shared PostgreSQL).
+     */
+    @Test
+    void aReserveHeldPastOrdersTimeoutMustNotStrandStockAfterTheOrderIsCancelled() throws Exception {
+        UUID product = client().productWithStock("Item", "10.00", 10);
+        products.add(product);
+        FaultProxy.Hold hold = proxy.hold(FaultProxy.reserve());
+
+        // 1. the reserve is parked in the proxy: Order times out waiting for it
+        Api response = client().call("POST", orderUrl(), "/api/v1/orders", key(),
+                orderJson(product, 3));
+        assertThat(hold.awaitArrived(1, Duration.ofSeconds(10))).as("reserve reached the proxy").isTrue();
+        assertThat(response.status()).isEqualTo(503);
+
+        // 2. Order's cancellation path ran: the fence found nothing reserved, so it gave up on the item
+        UUID orderId = client().onlyOrderFor(ORDER_DB, product);
+        assertThat(client().orderStatus(ORDER_DB, orderId)).isEqualTo("CANCELLED");
+        assertThat(client().itemStatus(ORDER_DB, orderId, product)).isEqualTo("NOT_RESERVED");
+        assertThat(client().inventoryRecords(product, "RESERVE")).as("Inventory has seen nothing yet").isZero();
+        assertThat(client().stock(product)).isEqualTo(new Stock(10, 0));
+
+        // 3. the held reserve finally reaches Inventory
+        int forwardedBeforeRelease = proxy.forwardedRequests();   // the saga's own fence call was forwarded already
+        hold.release();
+        awaitForwarded(forwardedBeforeRelease + 1, 10);   // counted once Inventory has answered the reserve
+
+        // 4. nothing may stay reserved for the cancelled order (and no Order-side release will ever come)
+        Stock after = client().stock(product);
+        int reserveRecords = client().inventoryRecords(product, "RESERVE");
+        assertThat(client().orderStatus(ORDER_DB, orderId)).isEqualTo("CANCELLED");
+        assertThat(after)
+                .as("late reserve accepted by Inventory for a cancelled order: RESERVE records=%d, stock=%s",
+                        reserveRecords, after)
+                .isEqualTo(new Stock(10, 0));
+    }
+
+    private static void awaitForwarded(int count, int seconds) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
+        while (proxy.forwardedRequests() < count) {
+            if (System.nanoTime() >= deadline) {
+                throw new AssertionError("held reserve was not forwarded within " + seconds + " s");
+            }
+            Thread.sleep(50);
         }
     }
 

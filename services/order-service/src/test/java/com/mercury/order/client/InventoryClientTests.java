@@ -145,4 +145,38 @@ class InventoryClientTests {
         assertThatThrownBy(() -> client.findOrderReservation(orderId))
                 .isInstanceOf(InventoryServiceException.class);
     }
+
+    @Test
+    void fenceReturnsTheReservationWhenOneExists() {
+        server.expect(requestTo(BASE_URL + "/api/v1/inventory/" + productId + "/reservations/k-1/fence"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess("{\"status\":\"RESERVED\",\"reservation\":{\"productId\":\"" + productId
+                        + "\",\"quantityReserved\":3,\"version\":4}}", MediaType.APPLICATION_JSON));
+
+        var found = client.fenceReservation(productId, "k-1");
+
+        assertThat(found).isPresent();
+        assertThat(found.get().quantityReserved()).isEqualTo(3);
+        server.verify();
+    }
+
+    @Test
+    void fenceIsEmptyWhenTheKeyWasFencedWithNothingReserved() {
+        server.expect(requestTo(BASE_URL + "/api/v1/inventory/" + productId + "/reservations/k-1/fence"))
+                .andRespond(withSuccess("{\"status\":\"FENCED\",\"reservation\":null}", MediaType.APPLICATION_JSON));
+
+        assertThat(client.fenceReservation(productId, "k-1")).isEmpty();
+    }
+
+    @Test
+    void fenceFailsLoudlyWhenInventoryIsDownOrAnswersNonsense() {
+        server.expect(requestTo(BASE_URL + "/api/v1/inventory/" + productId + "/reservations/k-1/fence"))
+                .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+        server.expect(requestTo(BASE_URL + "/api/v1/inventory/" + productId + "/reservations/k-2/fence"))
+                .andRespond(withSuccess("{\"status\":\"MAYBE\"}", MediaType.APPLICATION_JSON));
+        assertThatThrownBy(() -> client.fenceReservation(productId, "k-1"))
+                .isInstanceOf(InventoryServiceException.class);
+        assertThatThrownBy(() -> client.fenceReservation(productId, "k-2"))
+                .isInstanceOf(InventoryServiceException.class);   // never treated as "nothing held"
+    }
 }

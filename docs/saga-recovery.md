@@ -66,8 +66,24 @@ The solution has two halves.
    To tell reservations from releases, Inventory's `idempotency_records` gained an `operation` column
    (Flyway `V3__add_idempotency_operation.sql`, backfilled from the stored response).
 
-Order Service resolves an unknown item by asking: found means treat it as `RESERVED` (then release it);
-not found means `NOT_RESERVED`. No blind second reserve is ever sent. If Inventory cannot be asked, nothing is
+   The read-only lookup alone is not enough to cancel on: "not found" only describes the moment of the question,
+   and a reserve still in flight could be applied right after it (see section 11). So compensation settles the
+   key with a **fence**:
+
+   `POST /api/v1/inventory/{productId}/reservations/{idempotencyKey}/fence` (SERVICE or ADMIN role)
+   - `200 {"status":"RESERVED","reservation":{...}}`: a reservation exists under the key (the caller must release it);
+   - `200 {"status":"FENCED"}`: nothing was held and a tombstone now is: every later `reserve` under that key
+     is refused with `409 RESERVATION_FENCED` and changes nothing;
+   - idempotent; `422 IDEMPOTENCY_KEY_MISMATCH` for a key used for a release or another product.
+
+   The tombstone is a row in `idempotency_records` with `operation = FENCED` (Flyway `V6__fenced_reservations.sql`).
+   The key is unique, so exactly one of "reserve" and "fence" can claim it: a reserve still in flight when the fence
+   commits fails its own insert, rolls back its stock change and is answered `409`; a fence that loses to a committed
+   reserve sees that reservation and reports `RESERVED`. Deploy Inventory before Order Service (an Order that calls
+   `/fence` on an older Inventory gets an error, treats the item as unresolved and retries through recovery).
+
+Order Service resolves an unknown item by fencing the key: `RESERVED` means treat it as `RESERVED` (then release it);
+`FENCED` means `NOT_RESERVED`. No blind second reserve is ever sent. If Inventory cannot be asked, nothing is
 guessed: the item stays `RESERVING` and the saga waits for recovery.
 
 A request that is rejected locally (circuit open, bulkhead full) was never sent, so that outcome is *certain*
@@ -148,7 +164,7 @@ Inventory. They protect **requests**; recovery completes **accepted work**. Neit
 ## 7. Observability
 
 **Logs** use `key=value` fields and never contain the raw Idempotency-Key (only a short hash is ever logged):
-`saga orderId=… operation=RESERVE|LOOKUP|RELEASE productId=… result=OK|FOUND|NONE|FAILED reason=… durationMs=…`,
+`saga orderId=… operation=RESERVE|FENCE|RELEASE productId=… result=OK|FOUND|FENCED|FAILED reason=… durationMs=…`,
 and `recovery orderId=… attempt=… result=…`.
 
 **Metrics** (`/actuator/metrics/<name>`):
@@ -231,9 +247,11 @@ configuration. Every assertion reads PostgreSQL directly.
 
 ## 11. Known limitations
 
-- **A late request.** If a reserve request is still in flight inside the network or Inventory when Order Service
-  concludes "no reservation exists" and cancels, it could be applied afterwards, leaving a reservation no order
-  owns. Closing this needs Inventory to fence a key against later use; not built.
+- **A late request (closed for the synchronous path).** A reserve still in flight when Order Service gives up on
+  it can no longer be applied after the cancel: compensation fences the key at Inventory first (section 3), and
+  a reserve under a fenced key is refused. Covered by `SagaRecoveryIntegrationTests` (real stack,
+  the reserve is held in the fault proxy until after the cancel) and `InventoryReservationFenceTests` (latch tests
+  for both orders of the race, duplicates and concurrency). Fence tombstones are never cleaned up.
 - `RECOVERY_FAILED` orders need a person; there is no admin operation to retry or force-cancel them, by design
   (no authentication exists yet).
 - Failed attempts leave `CANCELLED` orders behind and idempotency records are never cleaned up.
@@ -244,5 +262,5 @@ configuration. Every assertion reads PostgreSQL directly.
 - The bulkhead sheds load: a burst larger than `max-concurrent-calls` gets some `503`s by design.
 - No Redis, payment or authentication; Product Service still has no Flyway.
 - ASYNC orders (Phase 10) add the `AWAITING_INVENTORY` state and a deadline lookup; see
-  [async-reservation.md](async-reservation.md#5-the-deadline). The late-request limitation above has an ASYNC
-  counterpart, described in [async-reservation.md](async-reservation.md#11-known-limitations).
+  [async-reservation.md](async-reservation.md#5-the-deadline). The ASYNC path is not fenced; its
+  late reservations are released by compensation, see [async-reservation.md](async-reservation.md#11-known-limitations).

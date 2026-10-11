@@ -73,7 +73,7 @@ class SagaRecoveryTests {
     void inventoryAcceptsEverything() {
         when(inventoryClient.reserve(any(), anyInt(), anyString())).thenReturn(OK);
         when(inventoryClient.release(any(), anyInt(), anyString())).thenReturn(OK);
-        when(inventoryClient.findReservation(any(), anyString())).thenReturn(Optional.empty());
+        when(inventoryClient.fenceReservation(any(), anyString())).thenReturn(Optional.empty());
     }
 
     // ---- helpers -------------------------------------------------------------------------
@@ -166,7 +166,7 @@ class SagaRecoveryTests {
         UUID p = product();
         // Inventory applied it, but the caller only saw a timeout
         when(inventoryClient.reserve(eq(p), anyInt(), anyString())).thenThrow(unavailable());
-        when(inventoryClient.findReservation(eq(p), anyString()))
+        when(inventoryClient.fenceReservation(eq(p), anyString()))
                 .thenReturn(Optional.of(new ReservationSnapshot(p, 3)));
         String key = key();
 
@@ -174,7 +174,7 @@ class SagaRecoveryTests {
                 .isInstanceOf(InventoryServiceException.class);
 
         UUID orderId = onlyOrderFor(p);
-        verify(inventoryClient).findReservation(eq(p), eq("order:" + orderId + ":product:" + p));
+        verify(inventoryClient).fenceReservation(eq(p), eq("order:" + orderId + ":product:" + p));
         verify(inventoryClient).release(eq(p), eq(3), eq("order:" + orderId + ":product:" + p + ":release"));
         assertThat(itemStatus(orderId, p)).isEqualTo(ReservationStatus.RELEASED);
         assertThat(orderStatus(orderId)).isEqualTo(OrderStatus.CANCELLED);
@@ -201,7 +201,7 @@ class SagaRecoveryTests {
     void ifInventoryCannotEvenBeQueriedTheOrderStaysPendingForRecoveryThenResolves() {
         UUID p = product();
         when(inventoryClient.reserve(eq(p), anyInt(), anyString())).thenThrow(unavailable());
-        when(inventoryClient.findReservation(any(), anyString())).thenThrow(unavailable());
+        when(inventoryClient.fenceReservation(any(), anyString())).thenThrow(unavailable());
         String key = key();
 
         assertThatThrownBy(() -> orderService.createOrder(key, order(p, 3)))
@@ -217,7 +217,7 @@ class SagaRecoveryTests {
 
         // Inventory comes back: it did hold the reservation
         reset(inventoryClient);
-        when(inventoryClient.findReservation(eq(p), anyString()))
+        when(inventoryClient.fenceReservation(eq(p), anyString()))
                 .thenReturn(Optional.of(new ReservationSnapshot(p, 3)));
         when(inventoryClient.release(any(), anyInt(), anyString())).thenReturn(OK);
         makeDue(orderId);
@@ -316,7 +316,7 @@ class SagaRecoveryTests {
     void retriesBackOffExponentiallyAndStopAtTheConfiguredMaximum() {
         UUID p = product();
         when(inventoryClient.reserve(any(), anyInt(), anyString())).thenThrow(unavailable());
-        when(inventoryClient.findReservation(any(), anyString())).thenThrow(unavailable());
+        when(inventoryClient.fenceReservation(any(), anyString())).thenThrow(unavailable());
         assertThatThrownBy(() -> orderService.createOrder(key(), order(p, 1)))
                 .isInstanceOf(InventoryServiceException.class);
         UUID orderId = onlyOrderFor(p);

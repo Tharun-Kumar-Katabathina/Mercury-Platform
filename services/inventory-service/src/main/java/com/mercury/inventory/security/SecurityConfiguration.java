@@ -57,7 +57,7 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/v1/inventory/**").hasAnyRole("ADMIN", "SERVICE")
                         .requestMatchers(HttpMethod.POST, "/api/v1/inventory").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/v1/inventory/*").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.POST, "/api/v1/inventory/*/reserve", "/api/v1/inventory/*/release").hasAnyRole("SERVICE", "ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/inventory/*/reserve", "/api/v1/inventory/*/release", "/api/v1/inventory/*/reservations/*/fence").hasAnyRole("SERVICE", "ADMIN")
                         .requestMatchers("/actuator/health/**", "/actuator/prometheus").permitAll()
                         .requestMatchers("/actuator/**").hasAnyRole("ADMIN", "SERVICE")
                         .anyRequest().denyAll())

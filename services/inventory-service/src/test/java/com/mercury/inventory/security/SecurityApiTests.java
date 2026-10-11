@@ -60,6 +60,15 @@ class SecurityApiTests {
     }
 
     @Test
+    void fencingAReservationIsForServicesOnly() throws Exception {
+        String fence = "/api/v1/inventory/" + PRODUCT + "/reservations/k/fence";
+        mvc.perform(post(fence)).andExpect(status().isUnauthorized());
+        mvc.perform(post(fence).header("Authorization", bearer(TestTokens.user("u-1")))).andExpect(status().isForbidden());
+        mvc.perform(post(fence).header("Authorization", bearer(TestTokens.service()))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FENCED"));
+    }
+
+    @Test
     void aServiceMayReserveAndReadButNotCreateOrSetStock() throws Exception {
         String service = bearer(TestTokens.service());
         mvc.perform(get("/api/v1/inventory/" + UUID.randomUUID()).header("Authorization", service)).andExpect(status().isNotFound());     // allowed, no such record
