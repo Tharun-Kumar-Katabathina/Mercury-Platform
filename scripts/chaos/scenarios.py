@@ -6,7 +6,7 @@ import time
 import uuid
 
 from lib import (Auth, Fixture, URLS, check_invariants, get_order, histogram, http, log, order_ids, place_order, run_load,
-                 await_until)
+                 await_until, let_failures_age_out)
 
 SCENARIOS = []
 
@@ -103,6 +103,7 @@ def product_killed(stack, fx):
     pid = fx.new_product(20)
     stack.kill("product-service")
     rs = [place_order(pid) for _ in range(5)]
+    failed_at = time.time()
     h = histogram(rs)
     assert set(h) == {503}, f"expected only 503, got {h}"
     assert all(isinstance(r.body, dict) and r.body.get("error") == "PRODUCT_SERVICE_UNAVAILABLE" for r in rs), rs[0].body
@@ -112,6 +113,7 @@ def product_killed(stack, fx):
     stack.wait_healthy()
     ok = place_order(pid)
     assert ok.status == 201, f"after restart -> {ok.status}"
+    let_failures_age_out(failed_at)       # the five failures must not count against Product in the next scenario's orders
     return f"5 requests -> {h}, 0 order rows saved; after restart 201"
 
 
