@@ -249,7 +249,7 @@ configuration. Every assertion reads PostgreSQL directly.
 
 - **A late request (closed for the synchronous path).** A reserve still in flight when Order Service gives up on
   it can no longer be applied after the cancel: compensation fences the key at Inventory first (section 3), and
-  a reserve under a fenced key is refused. Covered by `StrandedReservationRaceIntegrationTests` (real stack,
+  a reserve under a fenced key is refused. Covered by `SagaRecoveryIntegrationTests` (real stack,
   the reserve is held in the fault proxy until after the cancel) and `InventoryReservationFenceTests` (latch tests
   for both orders of the race, duplicates and concurrency). Fence tombstones are never cleaned up.
 - `RECOVERY_FAILED` orders need a person; there is no admin operation to retry or force-cancel them, by design
