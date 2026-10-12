@@ -335,6 +335,33 @@ def breaker_window_seconds():
     raise RuntimeError("ORDER_PRODUCT_CB_WINDOW not found in docker-compose.yml")
 
 
+def breaker_open_seconds():
+    """How long Order's product circuit breaker refuses every call once it has opened, read from the stack's configuration:
+    docker-compose.yml if it sets ORDER_PRODUCT_CB_OPEN_FOR, else the default in order-service's application.properties."""
+    sources = [(os.path.join(ROOT, "docker-compose.yml"), "ORDER_PRODUCT_CB_OPEN_FOR:", True),
+               (os.path.join(ROOT, "services/order-service/src/main/resources/application.properties"),
+                "${ORDER_PRODUCT_CB_OPEN_FOR:", False)]
+    for path, marker, quoted in sources:
+        with open(path) as f:
+            for line in f:
+                if marker in line:
+                    value = line.split(marker, 1)[1].strip().strip('"').rstrip("}").strip()
+                    return int(value.rstrip("s"))
+    raise RuntimeError("ORDER_PRODUCT_CB_OPEN_FOR not found in docker-compose.yml or application.properties")
+
+
+def let_breaker_probe(failed_at, margin=2):
+    """Wait until the product breaker, opened by failures at `failed_at` (time.time()), lets calls through again.
+
+    While it is open it refuses every call for `wait-duration-in-open-state`, even though the service it watches is back. A restart that
+    is healthy sooner than that gets its first order refused with 503 PRODUCT_SERVICE_UNAVAILABLE: the breaker doing its job, not
+    a defect in the recovery (seen once in the nightly: F03's order after the restart, 14 s into the scenario). The breaker opened no
+    later than `failed_at`, so the wait is an upper bound."""
+    remaining = breaker_open_seconds() + margin - (time.time() - failed_at)
+    if remaining > 0:
+        time.sleep(remaining)
+
+
 def let_failures_age_out(failed_at, margin=2):
     """Wait until calls that failed at `failed_at` (time.time()) have left the circuit breakers' time window.
 

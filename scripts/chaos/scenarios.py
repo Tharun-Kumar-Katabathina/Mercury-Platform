@@ -6,7 +6,7 @@ import time
 import uuid
 
 from lib import (Auth, Fixture, URLS, check_invariants, get_order, histogram, http, log, order_ids, place_order, run_load,
-                 await_until, let_failures_age_out)
+                 await_until, let_failures_age_out, let_breaker_probe)
 
 SCENARIOS = []
 
@@ -111,8 +111,11 @@ def product_killed(stack, fx):
     assert rows == "0", f"{rows} order rows were saved for refused requests"
     stack.start("product-service")
     stack.wait_healthy()
+    let_breaker_probe(failed_at)          # the breaker that counted the five failures refuses calls for its open interval, even to a healthy Product
     ok = place_order(pid)
-    assert ok.status == 201, f"after restart -> {ok.status}"
+    assert ok.status == 201, (f"after restart -> {ok.status} {ok.body}; "
+                              f"circuit breaker history: {stack.logged('order-service', 'circuit breaker', last=6)}; "
+                              f"recent product lookups that failed or were refused: {stack.logged('order-service', 'product lookup', last=10)}")
     let_failures_age_out(failed_at)       # the five failures must not count against Product in the next scenario's orders
     return f"5 requests -> {h}, 0 order rows saved; after restart 201"
 
