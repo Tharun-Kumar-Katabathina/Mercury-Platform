@@ -1,0 +1,53 @@
+# Frees GitHub Actions cache storage (10 GB per repository).
+#
+# Caches only make builds faster, so deleting them can never break a build. Those made by a pull request or a feature branch cannot be
+# restored by any other branch, so they are pure waste once that run is over. By default this deletes everything that does not belong to
+# the default branch (whose caches every branch can use), and runs once a week. Started by hand it can delete the default branch's too.
+name: Cache cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      include-default-branch:
+        description: "Also delete the default branch's caches (the next build is slow once)"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 4 * * 0"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cache-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: delete caches
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete the caches nobody can use
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+          INCLUDE_DEFAULT: ${{ inputs.include-default-branch }}
+        run: |
+          set -euo pipefail
+          if [ "$INCLUDE_DEFAULT" = "true" ]; then
+            keep='false'
+          else
+            keep=".ref == \"$DEFAULT_REF\""
+          fi
+          total() { gh cache list --limit 1000 --json sizeInBytes --jq 'map(.sizeInBytes) | add // 0'; }
+          echo "cache storage before: $(( $(total) / 1048576 )) MiB"
+          gh cache list --limit 1000 --json id,ref,key,sizeInBytes \
+            --jq ".[] | select(($keep) | not) | [.id, .ref, .sizeInBytes, .key] | @tsv" > doomed.tsv
+          echo "deleting $(wc -l < doomed.tsv) caches"
+          while IFS=$'\t' read -r id ref size key; do
+            echo "  $ref  $(( size / 1048576 )) MiB  $key"
+            gh cache delete "$id"
+          done < doomed.tsv
+          echo "cache storage after: $(( $(total) / 1048576 )) MiB"

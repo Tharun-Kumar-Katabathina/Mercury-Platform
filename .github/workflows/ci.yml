@@ -194,7 +194,8 @@ jobs:
           load: true
           tags: mercury/${{ matrix.service }}:ci
           cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          # only the default branch writes the layer cache: a pull request's cannot be restored by any other branch and filled the 10 GB limit
+          cache-to: ${{ github.ref == 'refs/heads/master' && format('type=gha,mode=max,scope={0}', matrix.service) || '' }}
       - name: Scan the image (operating system and libraries)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
