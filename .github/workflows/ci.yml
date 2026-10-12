@@ -132,6 +132,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      pull-requests: read                  # the secret scan lists a pull request's commits: a private repository needs this explicitly
       security-events: write
     steps:
       - uses: actions/checkout@v4
@@ -154,7 +155,9 @@ jobs:
           format: sarif
           output: trivy-fs.sarif
       - name: Show the findings in the repository's security tab
-        if: always()
+        # the Security tab (code scanning) is not available to a private repository without GitHub Advanced Security; the scan step
+        # above is the gate either way, this step only displays what it found
+        if: always() && !github.event.repository.private
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-fs.sarif
@@ -207,7 +210,9 @@ jobs:
           format: sarif
           output: trivy-image.sarif
       - name: Show the findings in the repository's security tab
-        if: always()
+        # the Security tab (code scanning) is not available to a private repository without GitHub Advanced Security; the scan step
+        # above is the gate either way, this step only displays what it found
+        if: always() && !github.event.repository.private
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-image.sarif
