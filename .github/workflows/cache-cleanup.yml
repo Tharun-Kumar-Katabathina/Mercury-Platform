@@ -6,6 +6,8 @@
 name: Cache cleanup
 
 on:
+  push:
+    branches: [ci-cache-cleanup]   # TEMPORARY: runs the cleanup once from this branch (a new workflow cannot be dispatched before it is on master)
   workflow_dispatch:
     inputs:
       include-default-branch:
