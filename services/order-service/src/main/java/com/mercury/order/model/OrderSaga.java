@@ -3,6 +3,7 @@ package com.mercury.order.model;
 import jakarta.persistence.*;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 /**
@@ -138,16 +139,21 @@ public class OrderSaga {
         return text == null || text.length() <= 1000 ? text : text.substring(0, 1000);
     }
 
+    /** The timestamp columns keep microseconds; a finer clock value would differ from the row it is stored in. */
+    private static Instant stampNow() {
+        return Instant.now().truncatedTo(ChronoUnit.MICROS);
+    }
+
     @PrePersist
     protected void onCreate() {
-        Instant now = Instant.now();
+        Instant now = stampNow();
         createdAt = now;
         updatedAt = now;
     }
 
     @PreUpdate
     protected void onUpdate() {
-        updatedAt = Instant.now();
+        updatedAt = stampNow();
     }
 
     public UUID getOrderId() {
