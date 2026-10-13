@@ -6,7 +6,7 @@ import time
 import uuid
 
 from lib import (Auth, Fixture, URLS, check_invariants, get_order, histogram, http, log, order_ids, place_order, run_load,
-                 await_until)
+                 await_until, let_failures_age_out, let_breaker_probe)
 
 SCENARIOS = []
 
@@ -103,6 +103,7 @@ def product_killed(stack, fx):
     pid = fx.new_product(20)
     stack.kill("product-service")
     rs = [place_order(pid) for _ in range(5)]
+    failed_at = time.time()
     h = histogram(rs)
     assert set(h) == {503}, f"expected only 503, got {h}"
     assert all(isinstance(r.body, dict) and r.body.get("error") == "PRODUCT_SERVICE_UNAVAILABLE" for r in rs), rs[0].body
@@ -110,8 +111,12 @@ def product_killed(stack, fx):
     assert rows == "0", f"{rows} order rows were saved for refused requests"
     stack.start("product-service")
     stack.wait_healthy()
+    let_breaker_probe(failed_at)          # the breaker that counted the five failures refuses calls for its open interval, even to a healthy Product
     ok = place_order(pid)
-    assert ok.status == 201, f"after restart -> {ok.status}"
+    assert ok.status == 201, (f"after restart -> {ok.status} {ok.body}; "
+                              f"circuit breaker history: {stack.logged('order-service', 'circuit breaker', last=6)}; "
+                              f"recent product lookups that failed or were refused: {stack.logged('order-service', 'product lookup', last=10)}")
+    let_failures_age_out(failed_at)       # the five failures must not count against Product in the next scenario's orders
     return f"5 requests -> {h}, 0 order rows saved; after restart 201"
 
 
@@ -123,7 +128,9 @@ def notification_killed(stack, fx):
     rs = [place_order(pid) for _ in range(5)]
     bad = [(r.status, r.body) for r in rs if r.status != 201]
     assert not bad, (f"orders must not depend on Notification, but: {histogram(rs)} {bad[:1]}; "
-                     f"order-service logged: {stack.logged('order-service', pid)}")
+                     f"order-service logged: {stack.logged('order-service', pid)}; "
+                     f"circuit breaker history: {stack.logged('order-service', 'circuit breaker', last=6)}; "
+                     f"recent product lookups that failed or were refused: {stack.logged('order-service', 'product lookup', last=10)}")
     ids = order_ids(rs)
     time.sleep(4)
     assert notifications(stack, ids)[0] == 0, "notifications appeared while the service was down"

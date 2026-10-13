@@ -11,6 +11,9 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -29,6 +32,8 @@ import java.util.function.Supplier;
  * was already accepted.
  */
 public class DownstreamGuard {
+
+    private static final Logger log = LoggerFactory.getLogger(DownstreamGuard.class);
 
     private final CircuitBreaker circuitBreaker;
     private final Bulkhead bulkhead;
@@ -62,6 +67,14 @@ public class DownstreamGuard {
                 .recordException(e -> e instanceof DownstreamFailure failure
                         && failure.getStatus().is5xxServerError())
                 .build());
+
+        // a circuit that opens must be explainable afterwards: which window, how many calls, how many failed
+        breaker.getEventPublisher().onStateTransition(event -> {
+            CircuitBreaker.Metrics m = breaker.getMetrics();
+            log.warn("circuit breaker '{}' {} -> {} (failure rate {}%, {} calls in the window, {} failed)",
+                    name, event.getStateTransition().getFromState(), event.getStateTransition().getToState(),
+                    m.getFailureRate(), m.getNumberOfBufferedCalls(), m.getNumberOfFailedCalls());
+        });
 
         Bulkhead bulkhead = Bulkhead.of(name, BulkheadConfig.custom()
                 .maxConcurrentCalls(settings.maxConcurrentCalls())

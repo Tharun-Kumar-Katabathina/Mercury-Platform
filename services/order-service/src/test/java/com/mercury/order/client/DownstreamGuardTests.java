@@ -181,4 +181,27 @@ class DownstreamGuardTests {
         assertThat(counted.state()).isEqualTo(CircuitBreaker.State.OPEN);     // 5 of the last 10 calls failed: tripped on a healthy service
         assertThat(timed.state()).isEqualTo(CircuitBreaker.State.CLOSED);     // the outage has aged out of the window
     }
+
+    /**
+     * Why the failure matrix makes a scenario wait for its failures to age out: failures that are still inside the window are counted
+     * against a service that has long recovered, so a few healthy calls can open the circuit ON A SUCCESS. (F03 killed Product, F04
+     * started 16 s later and its fourth order, the tenth call in the 20 s window with five failures in it, opened the circuit.)
+     */
+    @Test
+    void failuresStillInTheWindowOpenTheCircuitOnASuccessEvenThoughTheServiceHasRecovered() {
+        DownstreamGuard guard = DownstreamGuard.create("product", new ResilienceProperties.Downstream(
+                50f, 20, 10, Duration.ofSeconds(10), 2, 5, Duration.ZERO,
+                ResilienceProperties.Downstream.WindowType.COUNT_BASED), new SimpleMeterRegistry());
+        for (int i = 0; i < 5; i++) {
+            fail(guard, HttpStatus.SERVICE_UNAVAILABLE);                     // the outage
+        }
+        for (int i = 0; i < 4; i++) {
+            guard.execute(() -> "ok", DownstreamGuardTests::rejected);       // the service is back: nine calls, still closed
+            assertThat(guard.state()).isEqualTo(CircuitBreaker.State.CLOSED);
+        }
+
+        guard.execute(() -> "ok", DownstreamGuardTests::rejected);           // the tenth call SUCCEEDS: 5 of 10 failed = 50 %
+
+        assertThat(guard.state()).isEqualTo(CircuitBreaker.State.OPEN);
+    }
 }
