@@ -8,6 +8,7 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.Set;
@@ -72,14 +73,19 @@ public class User {
         lockedUntil = null;
     }
 
+    /** The timestamp columns keep microseconds; a finer clock value would differ from the row it is stored in. */
+    private static Instant stampNow() {
+        return Instant.now().truncatedTo(ChronoUnit.MICROS);
+    }
+
     @PrePersist
     void onCreate() {
-        createdAt = updatedAt = Instant.now();
+        createdAt = updatedAt = stampNow();
     }
 
     @PreUpdate
     void onUpdate() {
-        updatedAt = Instant.now();
+        updatedAt = stampNow();
     }
 
     public UUID getId() { return id; }
@@ -92,5 +98,13 @@ public class User {
     public Set<Role> getRoles() {
         return Arrays.stream(roles.split(",")).map(Role::valueOf)
                 .collect(Collectors.toCollection(() -> EnumSet.noneOf(Role.class)));
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
     }
 }

@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -87,16 +88,21 @@ public class Order {
         status = target;
     }
 
+    /** The timestamp columns keep microseconds; a finer clock value would differ from the row it is stored in. */
+    private static Instant stampNow() {
+        return Instant.now().truncatedTo(ChronoUnit.MICROS);
+    }
+
     @PrePersist
     protected void onCreate() {
-        Instant now = Instant.now();
+        Instant now = stampNow();
         createdAt = now;
         updatedAt = now;
     }
 
     @PreUpdate
     protected void onUpdate() {
-        updatedAt = Instant.now();
+        updatedAt = stampNow();
     }
 
     public UUID getId() {
