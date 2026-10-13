@@ -66,13 +66,17 @@ public class IndexSync {
         int pushed = 0;
         for (UUID product : store.dirtyProducts(properties.qdrant().syncBatch())) {
             try {
+                long purchasesSeen = store.purchasesOf(product);                    // before the rows: see FeatureStore.purchasesOf
                 Optional<float[]> vector = embeddings.embed(store.cooccurrenceRow(product));
                 if (vector.isPresent()) {
                     index.upsert(product, vector.get());
                 }
-                store.markIndexed(product);
-                synced.increment();
-                pushed++;
+                if (store.markIndexed(product, purchasesSeen)) {
+                    synced.increment();
+                    pushed++;
+                } else {
+                    log.debug("a purchase of product {} landed during its push; it stays dirty for the next pass", product);
+                }
             } catch (RuntimeException e) {
                 failed.increment();
                 log.warn("index sync of product {} failed, will retry: {}", product, e.toString());
