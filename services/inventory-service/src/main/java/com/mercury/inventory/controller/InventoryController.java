@@ -88,7 +88,7 @@ public class InventoryController {
     @GetMapping("/{productId}/reservations/{idempotencyKey}")
     public ReservationResponse getReservation(
             @PathVariable UUID productId,
-            @PathVariable String idempotencyKey) {
+            @PathVariable @NotBlank @Size(max = 255) String idempotencyKey) {
 
         return inventoryService.findReservation(productId, idempotencyKey);
     }
@@ -101,7 +101,7 @@ public class InventoryController {
     @PostMapping("/{productId}/reservations/{idempotencyKey}/fence")
     public FenceResponse fenceReservation(
             @PathVariable UUID productId,
-            @PathVariable String idempotencyKey) {
+            @PathVariable @NotBlank @Size(max = 255) String idempotencyKey) {
 
         return inventoryService.fenceReservation(productId, idempotencyKey);
     }

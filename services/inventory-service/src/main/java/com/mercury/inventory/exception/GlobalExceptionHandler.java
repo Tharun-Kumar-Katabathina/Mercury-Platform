@@ -4,9 +4,11 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -70,6 +72,22 @@ public class GlobalExceptionHandler {
             IdempotencyKeyMismatchException exception) {
 
         return body(422, "IDEMPOTENCY_KEY_MISMATCH", exception.getMessage());
+    }
+
+    /**
+     * A constrained parameter was refused, for example an Idempotency-Key longer than the 255 characters the database keeps.
+     * Without this the answer is a bare 400 (reserve, release) or, for a key that reached the database, a 500.
+     */
+    @ExceptionHandler(HandlerMethodValidationException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Map<String, Object> handleValidation(HandlerMethodValidationException exception) {
+
+        String message = exception.getAllErrors().stream()
+                .map(error -> error.getDefaultMessage())
+                .filter(text -> text != null && !text.isBlank())
+                .distinct()
+                .collect(Collectors.joining("; "));
+        return body(400, "VALIDATION_FAILED", message.isBlank() ? "The request is not valid" : message);
     }
 
     @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
