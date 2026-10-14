@@ -175,10 +175,30 @@ public class FeatureStore {
                 .param("n", limit).query((rs, i) -> rs.getObject(1, UUID.class)).list();
     }
 
+    /**
+     * How many purchases of the product are counted right now. A purchase raises this in the same transaction that changes
+     * the product's co-purchase rows, so read it BEFORE reading the rows a vector is built from: a vector built from rows
+     * read after this is at least as new as the count.
+     */
+    public long purchasesOf(UUID productId) {
+        return jdbc.sql("select purchases from product_stats where product_id = :p").param("p", productId)
+                .query(Long.class).optional().orElse(0L);
+    }
+
+    /**
+     * Clears the "dirty" flag, but only if no purchase has landed since the count the vector was built from. One that has
+     * leaves the flag set, so the next pass pushes the newer profile; the vector just pushed is not lost, only outdated.
+     * It is one atomic statement, so a purchase cannot land between the check and the clear.
+     *
+     * @param purchasesSeen what {@link #purchasesOf} returned before the vector's rows were read
+     * @return false if a purchase landed since (the product stays dirty)
+     */
     @Transactional
-    public void markIndexed(UUID productId) {
-        jdbc.sql("update product_stats set index_dirty = false, indexed_at = :now where product_id = :p")
-                .param("now", ts(Instant.now(clock))).param("p", productId).update();
+    public boolean markIndexed(UUID productId, long purchasesSeen) {
+        return jdbc.sql("""
+                update product_stats set index_dirty = false, indexed_at = :now
+                where product_id = :p and purchases = :seen
+                """).param("now", ts(Instant.now(clock))).param("p", productId).param("seen", purchasesSeen).update() == 1;
     }
 
     public long count(String table) {
