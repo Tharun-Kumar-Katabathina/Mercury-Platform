@@ -22,7 +22,7 @@ stack, or the platform smoke, security and performance gates. A claim that could
 | Recommendations (Phase 16) | **Mechanics verified**, one lost-update defect fixed; recommendation quality is not measured |
 | CI/CD (Phase 17) | **CI and continuous delivery verified**: every green merge publishes tested images. **Deployment not verified**: no cluster |
 
-<sup>[1]</sup> Full nightly on `a20be8b`: _result added when the run completes_.
+<sup>[1]</sup> Full nightly on `a20be8b` (2026-10-15): all 19 scenarios passed and baseline-vs-optimized completed — https://github.com/Tharun-Kumar-Katabathina/Mercury-Platform/actions/runs/38696401719
 
 ## 2. What each phase delivers and how it was verified
 
