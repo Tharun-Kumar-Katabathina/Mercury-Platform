@@ -248,22 +248,22 @@ the code is `PRODUCT_REQUEST_REJECTED` / `INVENTORY_REQUEST_REJECTED`.
 | `OrderPersistenceTests`, `OrderRetrievalApiTests` | 10 | model, Flyway schema, DB constraints, state transitions, GET |
 | `ProductClientTests`, `InventoryClientTests`, `ClientTimeoutTests` | 12 (4 + 6 + 2) | wire format, error translation, real timeouts |
 | `OrderPlannerTests` | 11 | validation, snapshot, total, canonical order |
-| `OrderServiceTests` | 16 | creation, reservation keys, every failure and compensation path, idempotency, 100-way concurrency |
+| `OrderServiceTests` | 17 | creation, reservation keys, every failure and compensation path, idempotency, 100-way concurrency |
 | `OrderIncompleteCompensationTests` | 1 | failed release leaves the order `PENDING` |
 | `OrderApiTests` | 17 | status codes and error bodies for every case in section 9 |
 | `OrderIdempotencyWithOpenInViewTests` | 1 | regression: duplicates must see completion even with open-in-view on |
 | `SagaRecoveryTests` | 12 | durable progress, ambiguous reservations, recovery, backoff, exclusivity |
-| `DownstreamGuardTests` | 8 | circuit breaker and bulkhead |
+| `DownstreamGuardTests` | 10 | circuit breaker and bulkhead |
 | `SagaOperationsTests` | 4 | `/actuator/sagas` and metrics |
 | `OrderEventsTests` | 9 | events written atomically with state changes, contents, no idempotency key, replays and duplicates |
 | `OutboxPublisherTests`, `OutboxEndpointTests` | 11 | publisher behaviour under Kafka failure, ordering, crashes, racing publishers; `/actuator/outbox` |
 | `OrderServiceApplicationTests` | 1 | context loads |
 | **`OrderFlowIntegrationTests`** | 12 | **real** Order, Product, Inventory and PostgreSQL |
-| **`SagaRecoveryIntegrationTests`** | 7 | **real stack + fault proxy**: lost responses, failed compensation, exhausted retries, six workers, `kill -9` |
+| **`SagaRecoveryIntegrationTests`** | 8 | **real stack + fault proxy**: lost responses, failed compensation, exhausted retries, six workers, `kill -9` |
 | **`ResilienceIntegrationTests`** | 1 | **real stack**: Inventory outage, circuit opens, recovery after return |
 | **`EventFlowIntegrationTests`** | 7 | **real stack incl. Kafka and Notification**: order → outbox → Kafka → notification, Kafka outage, crash before publishing, duplicate and poison messages, 50 concurrent orders |
 
-Phase 10 adds `AsyncReservationTests` (20), `AsyncReservationRecoveryTests` (7), `AsyncOrderApiTests` (6),
+Phase 10 adds `AsyncReservationTests` (20), `AsyncReservationRecoveryTests` (8), `AsyncOrderApiTests` (6),
 `InventoryClientTests` (+3), `InventoryEventKafkaTests` (7, real Kafka), `AsyncReservationIntegrationTests` (9, real
 stack) and `AsyncFailureInjectionIntegrationTests` (4, real stack with a killable Order process); see
 [async-reservation.md](async-reservation.md#10-tests).

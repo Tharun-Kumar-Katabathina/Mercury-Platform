@@ -167,7 +167,7 @@ Inventory Service: `KAFKA_BOOTSTRAP_SERVERS`, `INVENTORY_CONSUMER_GROUP`, `INVEN
 | Inventory | `OrderReservationFenceTests` | 7 | command after the fence, fence after a decision, both stalled-insert races, concurrent commands and fences |
 | Inventory | `ReservationCommandKafkaTests` (real Kafka) | 10 | one reply per command, duplicates, consumer crash, transient failure, poison, Kafka outage, publisher crash |
 | Order | `AsyncReservationTests` | 20 | accept, replies, replays, late reservations, cancel guard |
-| Order | `AsyncReservationRecoveryTests` | 7 | deadline fence (confirm / reject / fenced timeout), Inventory unreachable, `RECOVERY_FAILED` |
+| Order | `AsyncReservationRecoveryTests` | 8 | deadline fence (confirm / reject / fenced timeout), Inventory unreachable, `RECOVERY_FAILED` |
 | Order | `AsyncOrderApiTests`, `InventoryClientTests` (+3) | 6 + 4 | 202 / 200 / 422 contract, order fence client |
 | Order | `InventoryEventKafkaTests` (real Kafka) | 7 | reply consumer: duplicates, crash after commit, retries, poison, late reservation |
 | Order | `AsyncReservationIntegrationTests` (**real stack**) | 9 | accept → reserve → confirm; insufficient stock; replays; 20 concurrent orders for 5 units; Kafka down; Inventory down; duplicate and poison commands |

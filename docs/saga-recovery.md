@@ -238,10 +238,10 @@ The environment variable for each circuit/bulkhead setting is `ORDER_<INVENTORY|
 | Suite | Count | What it proves |
 |---|---|---|
 | `SagaRecoveryTests` | 12 | durable intent before the call, lost response resolved by lookup, "never reached" resolved, unqueryable Inventory leaves the order pending then resolves, failed release retried with the same key, abandoned saga recovered and key freed, backoff and the attempt limit, idempotent and exclusive recovery, metrics |
-| `DownstreamGuardTests` | 8 | circuit opens, fails fast, half-opens, closes, 4xx do not trip it, bulkhead rejects, contradictory settings refused |
+| `DownstreamGuardTests` | 10 | circuit opens, fails fast, half-opens, closes, 4xx do not trip it, bulkhead rejects, contradictory settings refused |
 | `SagaOperationsTests` | 4 | `/actuator/sagas`, no keys leaked, recovery metrics, circuit gauge |
 | `InventoryReservationLookupTests` (Inventory) | 7 | lookup finds, changes nothing, 404 cases |
-| **`SagaRecoveryIntegrationTests`** | 7 | **real stack with a fault proxy**: response lost (found and released; also when un-queryable then recovered), request refused, failed compensation then recovery, retries exhausted, six simultaneous workers, `kill -9` of the Order process |
+| **`SagaRecoveryIntegrationTests`** | 8 | **real stack with a fault proxy**: response lost (found and released; also when un-queryable then recovered), request refused, failed compensation then recovery, retries exhausted, six simultaneous workers, `kill -9` of the Order process |
 | **`ResilienceIntegrationTests`** | 1 | **real stack**: Inventory stopped, bounded latency, circuit opens, fail-fast, resolves after restart, circuit closes |
 
 The real-stack tests use a Testcontainers PostgreSQL, the real Product and Inventory services as separate
