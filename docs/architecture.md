@@ -7,9 +7,9 @@ Redis) are not built and are not described here.
 
 | Component | Port | Owns | Notes |
 |---|---|---|---|
-| Product Service | 8081 | Products (`products` table, database `mercury_product`) | Spring Boot 4.0.8, Java 21 |
-| Inventory Service | 8082 | Stock and idempotency records (`inventory`, `idempotency_records`, database `mercury_inventory`) | Spring Boot 4.0.8, Java 21 |
-| Order Service | 8083 | Orders, order items, order idempotency records (`orders`, `order_items`, `order_idempotency_records`, database `mercury_order`) | Spring Boot 4.0.8, Java 21; see [Order Service](order-service.md) |
+| Product Service | 8081 | Products (`products` table, database `mercury_product`) | Spring Boot 4.1.1, Java 21 |
+| Inventory Service | 8082 | Stock and idempotency records (`inventory`, `idempotency_records`, database `mercury_inventory`) | Spring Boot 4.1.1, Java 21 |
+| Order Service | 8083 | Orders, order items, order idempotency records (`orders`, `order_items`, `order_idempotency_records`, database `mercury_order`) | Spring Boot 4.1.1, Java 21; see [Order Service](order-service.md) |
 | API Gateway | 8090 | nothing (stateless) | the only public entry point: authentication, rate limits, CORS, routing; see [Security](security.md) |
 | User Service | 8085 | Accounts (`users`, database `mercury_user`) | registration, login, JWT issuing (RS256); see [Security](security.md) |
 | Recommendation Service | 8086 | Purchase features (database `mercury_recommendation`), vectors in Qdrant, cache in Redis | learns from order events; see [Recommendations](recommendations.md) |
