@@ -10,10 +10,11 @@ push / pull request
    │      └─ real-stack integration tests (Order → Product → Inventory → PostgreSQL → Kafka → Notification, with failure injection)
    ├─ static checks   shellcheck · Compose files valid · Kubernetes manifests render + validate (kubeconform) · workflows valid (actionlint)
    ├─ security scan   gitleaks (secrets, full history) · Trivy (dependencies + configuration) → findings in the Security tab
-   ├─ images ×7       build (layer cache) → Trivy image scan (HIGH/CRITICAL with a fix fails the build) → push to GHCR on main (tag = commit SHA)
+   ├─ images ×7       build (layer cache) → Trivy image scan (HIGH/CRITICAL with a fix fails the build) → on the default branch: push to GHCR (tag = commit SHA)
    └─ platform        compose up → authenticated smoke test → security suite (46 attacks) → performance smoke (100 users, hard thresholds)
                                                                                       │
-main only ─────────────────────────────────────────────────────────────────────────────┴─> deploy to staging (protected environment) → rollout checks → automatic rollback
+default branch, every gate green ─> release: tag the tested images "latest" ──────────┴─> deploy to staging (protected environment, when enabled):
+                                                                                           Inventory and the rest first, then Order → rollout checks → automatic rollback
 nightly   ─ failure matrix (chaos) · baseline-vs-optimized load test
 ```
 
@@ -25,9 +26,10 @@ nightly   ─ failure matrix (chaos) · baseline-vs-optimized load test
 | `real-stack integration tests` | Order Service against real Product, Inventory, Notification, PostgreSQL and Kafka: idempotency, saga recovery, a killed process, Kafka outages, concurrency | ✅ |
 | `static checks` | scripts lint clean; the four Compose combinations are valid; both Kubernetes overlays render and match the 1.31 schemas; the workflows themselves are valid | ✅ |
 | `security scan` | no secret in the code *or its history*; no HIGH/CRITICAL dependency or configuration issue with a fix available | ✅ |
-| `image (<service>)` ×7 | the image builds, has no HIGH/CRITICAL OS or library vulnerability with a fix; on `main` it is published tagged with the commit | ✅ |
+| `image (<service>)` ×7 | the image builds, has no HIGH/CRITICAL OS or library vulnerability with a fix; on the default branch it is pushed to GHCR under the commit SHA | ✅ |
 | `platform smoke, security and performance` | the whole system works from a cold start with generated secrets; the attacks are all refused; 100 concurrent shoppers meet error-rate ≤ 1 %, browse p95 ≤ 500 ms, order p95 ≤ 2 s | ✅ |
-| `deploy to staging` | `main` only, only when the repository variable `DEPLOY_ENABLED` is `true`, runs in the protected `staging` environment (required reviewers / wait timer are configured there); renders the production overlay with this commit's images, applies it, waits for every rollout, **rolls back** if any fails | n/a |
+| `release the images` | default branch only, after every gate above passed: the commit's images (already pushed under the SHA) are tagged `latest`. An image that a later gate fails is never promoted | n/a |
+| `deploy to staging` | default branch only, after `release`, only when the repository variable `DEPLOY_ENABLED` is `true`, runs in the protected `staging` environment (required reviewers / wait timer are configured there); renders the production overlay with this commit's images, applies everything except Order Service and waits for those rollouts, then Order Service (Order calls Inventory endpoints a release may add, so Inventory goes first), **rolls back** if any fails | n/a |
 
 **Branch protection** (set once in the repository settings): require the status checks above on the default branch, require a pull request
 and one review, disallow force-push. The pipeline cannot enforce its own gates; the repository settings do.
@@ -50,8 +52,9 @@ skipped. This is how a scenario that fails now and then is measured, and how a f
   the Docker base image. Each update is a pull request that has to pass the full pipeline.
 - Least privilege: the workflow's default permission is `contents: read`; only the jobs that publish images or upload scan results get
   `packages: write` / `security-events: write`.
-- Images are tagged with the commit SHA (immutable) plus `main` (moving); the production overlay is rendered with the SHA, so what runs is exactly
-  what was tested.
+- Images are built once and tagged with the commit SHA (immutable); `latest` (moving) is added only after every gate passed. The production
+  overlay is rendered with the SHA, so what runs is exactly what was tested. The default branch is read from the repository
+  (`github.event.repository.default_branch`), not written into the workflow, so renaming it cannot silently switch delivery off.
 - Concurrency: a new push cancels the previous run of the same branch's pull request; deploys never overlap and are never cancelled half-way.
 
 ## What it needs from you (once)
