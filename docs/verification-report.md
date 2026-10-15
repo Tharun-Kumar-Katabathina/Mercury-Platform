@@ -122,7 +122,7 @@ These are documented in the phase documents and accepted for this stage. None is
 |---|---|
 | Staging cluster and deployment settings | Repository owner; Phase 18 |
 | 23 Dependabot pull requests (Spring Boot 4.1.1, Maven 3.10.0, lz4, resilience4j, Actions major versions) | One group at a time through CI |
-| Node 20 deprecation warnings on several Actions | Resolved by the Actions bumps above |
+| Node 20 deprecation warnings on several Actions | checkout, setup-java, setup-buildx, build-push and gitleaks moved to their Node 24 majors; `upload-artifact`, `login-action` and `codeql-action` follow when Dependabot opens their bumps |
 | Branch protection on `master` | Repository settings: require a pull request and the always-running checks |
 
 ## 7. How to reproduce
