@@ -6,6 +6,7 @@ import com.mercury.inventory.event.ReservationCommand;
 import com.mercury.inventory.model.OrderReservation;
 import com.mercury.inventory.model.ReservationOutcome;
 import com.mercury.inventory.outbox.OutboxRepository;
+import com.mercury.inventory.repository.ProcessedEventRepository;
 import com.mercury.inventory.repository.OrderReservationRepository;
 import com.mercury.inventory.service.OrderReservationService.Result;
 import jakarta.persistence.EntityManager;
@@ -39,6 +40,7 @@ class OrderReservationFenceTests {
     @Autowired private OrderReservationService service;
     @Autowired private InventoryService inventoryService;
     @Autowired private OutboxRepository outbox;
+    @Autowired private ProcessedEventRepository processedEvents;
     @MockitoSpyBean private OrderReservationRepository reservations;
     @PersistenceContext private EntityManager entityManager;
 
@@ -129,8 +131,9 @@ class OrderReservationFenceTests {
         UUID p = product(10);
         UUID orderId = UUID.randomUUID();
         Stall stall = stallInsertOf(ReservationOutcome.RESERVED, orderId);
+        ReservationCommand stalled = command(orderId, p, 3);
 
-        CompletableFuture<Result> command = CompletableFuture.supplyAsync(() -> service.reserve(command(orderId, p, 3)));
+        CompletableFuture<Result> command = CompletableFuture.supplyAsync(() -> service.reserve(stalled));
         assertThat(stall.reached.await(30, TimeUnit.SECONDS)).as("command reached its insert").isTrue();
 
         OrderReservation fence = service.fence(orderId);            // commits while the command is stalled
@@ -140,6 +143,11 @@ class OrderReservationFenceTests {
         assertThat(command.get(30, TimeUnit.SECONDS)).isEqualTo(Result.FENCED);
         assertStock(p, 10, 0);                                       // its stock change rolled back with it
         assertThat(replies(orderId)).isZero();                       // and so did its reply
+        // the losing command is still recorded as handled, like one that arrives after the fence: otherwise its
+        // offset is committed with no trace that Inventory ever saw it
+        assertThat(processedEvents.existsById(stalled.eventId())).isTrue();
+        assertThat(service.reserve(stalled)).isEqualTo(Result.DUPLICATE);   // redelivered: nothing new happens
+        assertStock(p, 10, 0);
     }
 
     @Test
