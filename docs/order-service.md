@@ -268,7 +268,7 @@ Phase 10 adds `AsyncReservationTests` (20), `AsyncReservationRecoveryTests` (8),
 stack) and `AsyncFailureInjectionIntegrationTests` (4, real stack with a killable Order process); see
 [async-reservation.md](async-reservation.md#10-tests).
 
-Order Service: **197 tests**. (Product 27, Inventory 77, Notification 15.)
+Order Service: **229 tests**. (Product 50, Inventory 126, Notification 20.)
 
 The integration tests start a Testcontainers PostgreSQL (`postgres:16-alpine`), build Product and Inventory
 from `../product-service` and `../inventory-service` and run each as a separate process; Order Service runs in

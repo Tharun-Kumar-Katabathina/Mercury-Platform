@@ -72,11 +72,11 @@ what is popular. Limits are capped (default 50).
 
 ## 5. Latency
 
-The measurements are in [performance.md](performance.md) (recommendation section, produced by `load-tests/k6/recommendations.js`).
+No load measurement of these endpoints is published: `load-tests/k6/recommendations.js` exists, but its results are not in the repository.
 
 ## 6. Tests
 
-24 tests: the embedding (deterministic, unit length, same-companions-are-closer), the event handler (confirmed teaches, cancelled does not,
+43 tests: the embedding (deterministic, unit length, same-companions-are-closer), the event handler (confirmed teaches, cancelled does not,
 redelivery is a no-op, malformed refused), the ranking (already-bought excluded, cold start, bounded), a **real Qdrant + real Redis** pipeline
 (purchases → vectors → similarity → cache, index outage catch-up, cache outage), and the security rules. The platform check proves the Kafka
 path end to end: it places an order and waits until the recommendation service lists the product as purchased.

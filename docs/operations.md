@@ -125,6 +125,6 @@ scripts/restore-database.sh <dump> <database>        # into an EMPTY database; r
 
 ## Capacity (from the load tests)
 
-See [performance.md](performance.md) for measured throughput and latency at 100 to 10,000 concurrent users and what limited each level. Rules of thumb that hold regardless:
+See [performance results](performance-results/README.md) for measured latency at 100, 500 and 1,000 concurrent users (no higher level was run). Rules of thumb that hold regardless:
 replicas × `DB_POOL_SIZE` must stay under PostgreSQL's `max_connections`; the outbox publisher and recovery worker are cluster-safe (leased row claims) so more replicas
 only add capacity; Kafka consumers scale to the partition count (3 by default).

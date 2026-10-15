@@ -24,7 +24,8 @@ Microservices e-commerce platform.
 - [Observability](docs/observability.md): Prometheus metrics, Grafana dashboards, distributed traces across REST and Kafka, log correlation
 - [Security](docs/security.md): JWT, roles, gateway, secrets, scanning, and what is not covered
 - [Resilience](docs/resilience.md) and the [failure matrix](docs/failure-matrix.md): every failure injected, what happened, what was checked
-- [Performance](docs/performance.md): load tests from 100 to 10,000 concurrent users, baseline vs optimized
+- [Performance results](docs/performance-results/README.md): load tests at 100, 500 and 1,000 users, baseline vs optimized, and the 100-user CI gate
+- [Phase 17.5 verification report](docs/verification-report.md): what was verified, what was fixed, what was not verified
 - [Recommendations](docs/recommendations.md): purchase features, vector search, personalised results
 - [CI/CD](docs/ci-cd.md): the pipeline and its gates
 - [Local development](docs/local-development.md): run the services, run the tests
