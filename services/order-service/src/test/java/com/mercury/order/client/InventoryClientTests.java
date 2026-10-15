@@ -111,38 +111,48 @@ class InventoryClientTests {
     }
 
     @Test
-    void findOrderReservationReadsTheOrdersOutcome() {
+    void fencingAnOrderPostsToInventoryAndReturnsItsDecision() {
         UUID orderId = UUID.randomUUID();
-        server.expect(requestTo(BASE_URL + "/api/v1/inventory/reservations/orders/" + orderId))
-                .andExpect(method(HttpMethod.GET))
+        server.expect(requestTo(BASE_URL + "/api/v1/inventory/reservations/orders/" + orderId + "/fence"))
+                .andExpect(method(HttpMethod.POST))
                 .andRespond(withSuccess("{\"orderId\":\"" + orderId + "\",\"status\":\"REJECTED\","
                         + "\"reason\":\"INSUFFICIENT_STOCK\",\"items\":[]}", MediaType.APPLICATION_JSON));
 
-        var found = client.findOrderReservation(orderId);
+        var outcome = client.fenceOrderReservation(orderId);
 
-        assertThat(found).isPresent();
-        assertThat(found.get().reserved()).isFalse();
-        assertThat(found.get().reason()).isEqualTo("INSUFFICIENT_STOCK");
+        assertThat(outcome.rejected()).isTrue();
+        assertThat(outcome.reason()).isEqualTo("INSUFFICIENT_STOCK");
         server.verify();
     }
 
     @Test
-    void findOrderReservationIsEmptyWhenInventoryHasDecidedNothing() {
+    void fencingAnUndecidedOrderReturnsFenced() {
         UUID orderId = UUID.randomUUID();
-        server.expect(requestTo(BASE_URL + "/api/v1/inventory/reservations/orders/" + orderId))
-                .andRespond(withStatus(HttpStatus.NOT_FOUND).contentType(MediaType.APPLICATION_JSON)
-                        .body("{\"status\":404,\"error\":\"ORDER_RESERVATION_NOT_FOUND\"}"));
+        server.expect(requestTo(BASE_URL + "/api/v1/inventory/reservations/orders/" + orderId + "/fence"))
+                .andRespond(withSuccess("{\"orderId\":\"" + orderId + "\",\"status\":\"FENCED\",\"items\":[]}",
+                        MediaType.APPLICATION_JSON));
 
-        assertThat(client.findOrderReservation(orderId)).isEmpty();
+        assertThat(client.fenceOrderReservation(orderId).fenced()).isTrue();
     }
 
     @Test
-    void findOrderReservationFailsLoudlyWhenInventoryIsDown() {
+    void anOrderFenceStatusTheClientDoesNotKnowIsAnErrorNotACancel() {
         UUID orderId = UUID.randomUUID();
-        server.expect(requestTo(BASE_URL + "/api/v1/inventory/reservations/orders/" + orderId))
+        server.expect(requestTo(BASE_URL + "/api/v1/inventory/reservations/orders/" + orderId + "/fence"))
+                .andRespond(withSuccess("{\"orderId\":\"" + orderId + "\",\"status\":\"MAYBE\"}", MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> client.fenceOrderReservation(orderId))
+                .isInstanceOfSatisfying(InventoryServiceException.class,
+                        e -> assertThat(e.getStatus().value()).isEqualTo(502));
+    }
+
+    @Test
+    void fencingAnOrderFailsLoudlyWhenInventoryIsDown() {
+        UUID orderId = UUID.randomUUID();
+        server.expect(requestTo(BASE_URL + "/api/v1/inventory/reservations/orders/" + orderId + "/fence"))
                 .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
 
-        assertThatThrownBy(() -> client.findOrderReservation(orderId))
+        assertThatThrownBy(() -> client.fenceOrderReservation(orderId))
                 .isInstanceOf(InventoryServiceException.class);
     }
 

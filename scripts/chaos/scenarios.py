@@ -321,10 +321,11 @@ def out_of_order(stack, fx):
     return "unknown-order reply, rejection-after-confirmation and a repeated reply: all ignored, order still CONFIRMED"
 
 
-@scenario("F15", "Reservation timeout, then the reservation arrives late", "ASYNC",
-          "order is cancelled with RESERVATION_TIMEOUT; the late reservation is detected and released; stock conserved")
+@scenario("F15", "Reservation timeout, then the commands arrive late", "ASYNC",
+          "order is fenced at Inventory and cancelled with RESERVATION_TIMEOUT; the late commands reserve nothing; stock conserved")
 def late_reservation(stack, fx):
     pid = fx.new_product(30)
+    fenced0 = stack.metric("inventory-service", "inventory_commands_fenced_total") or 0
     late0 = stack.metric("order-service", "order_inventory_late_reservations_total") or 0
     stack.pause("kafka")                                   # the command cannot leave Order
     rs = [place_order(pid, 2) for _ in range(3)]
@@ -333,10 +334,19 @@ def late_reservation(stack, fx):
     cancelled = await_until(lambda: all(status_of(stack, i) == "CANCELLED" for i in ids), timeout=90)
     assert cancelled, "orders were not cancelled after the waiting deadline"
     assert all("RESERVATION_TIMEOUT" in (cancel_reason(stack, i) or "") for i in ids), "wrong cancellation reason"
+    oids = ",".join(repr(i) for i in ids)
+    decisions = sorted(r[0] for r in stack.sql("mercury_inventory", f"select status from order_reservations where order_id in ({oids})"))
+    assert decisions == ["FENCED"] * 3, f"Order cancelled without fencing the orders at Inventory: {decisions}"
     stack.unpause("kafka")                                 # the commands now arrive, too late
-    late = await_until(lambda: (stack.metric("order-service", "order_inventory_late_reservations_total") or 0) >= late0 + 3, timeout=120)
-    assert late, "late reservations were not detected"
-    return "3 orders cancelled by the deadline while Kafka was frozen; 3 late reservations detected and released after it returned"
+    refused = await_until(lambda: (stack.metric("inventory-service", "inventory_commands_fenced_total") or 0) >= fenced0 + 3, timeout=120)
+    assert refused, "Inventory did not refuse the late commands as fenced"
+    stock = stack.sql("mercury_inventory", f"select available_quantity, reserved_quantity from inventory where product_id='{pid}'")[0]
+    assert tuple(stock) == ("30", "0"), f"a late command held stock for a cancelled order: available/reserved = {stock}"
+    replies = stack.sql("mercury_inventory", f"select count(*) from inventory_outbox where aggregate_id in ({oids})")[0][0]
+    assert replies == "0", f"{replies} replies were sent for fenced orders"
+    late = (stack.metric("order-service", "order_inventory_late_reservations_total") or 0) - late0
+    assert late == 0, f"{late} late reservations reached Order although the orders were fenced"
+    return "3 orders fenced and cancelled by the deadline while Kafka was frozen; the 3 late commands were refused, stock 30/0, no reply"
 
 
 @scenario("F16", "Inventory frozen when the waiting deadline passes", "ASYNC",

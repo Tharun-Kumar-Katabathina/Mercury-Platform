@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -77,5 +78,31 @@ class OrderReservationEndpointTests {
         mockMvc.perform(get("/api/v1/inventory/{id}", p))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.availableQuantity").value(5));
+    }
+
+    @Test
+    void fencingAnUndecidedOrderAnswersFencedAndTheLookupThenReportsIt() throws Exception {
+        UUID orderId = UUID.randomUUID();
+
+        mockMvc.perform(post("/api/v1/inventory/reservations/orders/{id}/fence", orderId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orderId").value(orderId.toString()))
+                .andExpect(jsonPath("$.status").value("FENCED"))
+                .andExpect(jsonPath("$.items").isEmpty());
+        mockMvc.perform(get("/api/v1/inventory/reservations/orders/{id}", orderId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FENCED"));
+    }
+
+    @Test
+    void fencingADecidedOrderReportsTheDecision() throws Exception {
+        UUID p = product(10);
+        UUID orderId = UUID.randomUUID();
+        reservations.reserve(command(orderId, p, 3));
+
+        mockMvc.perform(post("/api/v1/inventory/reservations/orders/{id}/fence", orderId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RESERVED"))
+                .andExpect(jsonPath("$.items[0].quantity").value(3));
     }
 }

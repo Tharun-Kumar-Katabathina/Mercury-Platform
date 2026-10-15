@@ -41,6 +41,7 @@ public class ReservationCommandHandler {
             case RESERVED -> metrics.reserved();
             case REJECTED -> metrics.rejected();
             case DUPLICATE -> metrics.duplicate();
+            case FENCED -> metrics.fenced();
         }
         log.info("command eventId={} orderId={} result={}", command.eventId(), command.orderId(), result);
         return result;

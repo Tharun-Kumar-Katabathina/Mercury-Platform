@@ -24,6 +24,7 @@ class FenceTombstoneCleanupTests {
 
     @Autowired private FenceTombstoneCleanup cleanup;
     @Autowired private IdempotencyRecordRepository records;
+    @Autowired private com.mercury.inventory.repository.OrderReservationRepository orderReservations;
     @Autowired private JdbcTemplate jdbc;
 
     private String store(IdempotencyOperation operation, Duration age) {
@@ -76,9 +77,30 @@ class FenceTombstoneCleanupTests {
         assertThat(cleanup.purgeExpired(Instant.now())).isZero();
     }
 
+    private java.util.UUID fencedOrder(Duration age) {
+        java.util.UUID orderId = java.util.UUID.randomUUID();
+        orderReservations.saveAndFlush(com.mercury.inventory.model.OrderReservation.fenced(orderId, Instant.now().minus(age)));
+        return orderId;
+    }
+
+    @Test
+    void anExpiredOrderFenceIsRemovedAndAFreshOneAndDecidedOrdersAreKept() {
+        java.util.UUID expired = fencedOrder(RETENTION.plusHours(1));
+        java.util.UUID fresh = fencedOrder(RETENTION.minusHours(1));
+        java.util.UUID rejected = java.util.UUID.randomUUID();
+        orderReservations.saveAndFlush(com.mercury.inventory.model.OrderReservation.rejected(
+                rejected, "INSUFFICIENT_STOCK", java.util.UUID.randomUUID(), Instant.now().minus(Duration.ofDays(400))));
+
+        cleanup.purgeExpired(Instant.now());
+
+        assertThat(orderReservations.existsById(expired)).isFalse();
+        assertThat(orderReservations.existsById(fresh)).isTrue();
+        assertThat(orderReservations.existsById(rejected)).isTrue();
+    }
+
     @Test
     void aRetentionShorterThanAnHourIsRefused() {
-        assertThatThrownBy(() -> new FenceTombstoneCleanup(records, Duration.ofMinutes(5)))
+        assertThatThrownBy(() -> new FenceTombstoneCleanup(records, orderReservations, Duration.ofMinutes(5)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("at least 1 hour");
     }

@@ -28,7 +28,6 @@ import tools.jackson.databind.json.JsonMapper;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -102,8 +101,8 @@ class AsyncReservationRecoveryTests {
     void whenInventoryHasReservedTheOrderAfterTheDeadlineItIsConfirmed() {
         UUID p = product();
         UUID orderId = acceptedOrder(p, 2);
-        when(inventoryClient.findOrderReservation(orderId))
-                .thenReturn(Optional.of(new OrderReservationSnapshot(orderId, "RESERVED", null)));
+        when(inventoryClient.fenceOrderReservation(orderId))
+                .thenReturn(new OrderReservationSnapshot(orderId, "RESERVED", null));
 
         recoverUntil(orderId, SagaState.CONFIRMED);
 
@@ -117,8 +116,8 @@ class AsyncReservationRecoveryTests {
     void whenInventoryRejectedTheOrderAfterTheDeadlineItIsCancelledWithTheReason() {
         UUID p = product();
         UUID orderId = acceptedOrder(p, 50);
-        when(inventoryClient.findOrderReservation(orderId))
-                .thenReturn(Optional.of(new OrderReservationSnapshot(orderId, "REJECTED", "INSUFFICIENT_STOCK")));
+        when(inventoryClient.fenceOrderReservation(orderId))
+                .thenReturn(new OrderReservationSnapshot(orderId, "REJECTED", "INSUFFICIENT_STOCK"));
 
         recoverUntil(orderId, SagaState.CANCELLED);
 
@@ -130,10 +129,10 @@ class AsyncReservationRecoveryTests {
     }
 
     @Test
-    void whenInventoryHasDecidedNothingTheOrderIsCancelledAsATimeout() {
+    void whenInventoryHasDecidedNothingTheOrderIsFencedAndCancelledAsATimeout() {
         UUID p = product();
         UUID orderId = acceptedOrder(p, 1);
-        when(inventoryClient.findOrderReservation(orderId)).thenReturn(Optional.empty());
+        when(inventoryClient.fenceOrderReservation(orderId)).thenReturn(new OrderReservationSnapshot(orderId, "FENCED", null));
 
         recoverUntil(orderId, SagaState.CANCELLED);
 
@@ -144,10 +143,10 @@ class AsyncReservationRecoveryTests {
     }
 
     @Test
-    void aReservationThatShowsUpAfterATimeoutCancellationIsGivenBack() {
+    void aReservationThatShowsUpAfterATimeoutCancellationAnywayIsGivenBack() {
         UUID p = product();
         UUID orderId = acceptedOrder(p, 4);
-        when(inventoryClient.findOrderReservation(orderId)).thenReturn(Optional.empty());
+        when(inventoryClient.fenceOrderReservation(orderId)).thenReturn(new OrderReservationSnapshot(orderId, "FENCED", null));
         recoverUntil(orderId, SagaState.CANCELLED);
 
         String late = "{\"eventId\":\"" + UUID.randomUUID() + "\",\"eventType\":\"InventoryReserved\","
@@ -166,7 +165,7 @@ class AsyncReservationRecoveryTests {
     void whenInventoryCannotBeAskedTheOrderStaysWaitingAndIsRetriedWithBackoff() {
         UUID p = product();
         UUID orderId = acceptedOrder(p, 1);
-        when(inventoryClient.findOrderReservation(orderId))
+        when(inventoryClient.fenceOrderReservation(orderId))
                 .thenThrow(new InventoryServiceException(HttpStatus.SERVICE_UNAVAILABLE, null));
         await().atMost(Duration.ofSeconds(2)).until(() -> {
             recovery.recoverDue();
@@ -179,8 +178,8 @@ class AsyncReservationRecoveryTests {
         assertThat(saga.getLastError()).isNotBlank();
 
         // once Inventory answers again, the order resolves
-        org.mockito.Mockito.doReturn(Optional.of(new OrderReservationSnapshot(orderId, "RESERVED", null)))
-                .when(inventoryClient).findOrderReservation(orderId);
+        org.mockito.Mockito.doReturn(new OrderReservationSnapshot(orderId, "RESERVED", null))
+                .when(inventoryClient).fenceOrderReservation(orderId);
         recoverUntil(orderId, SagaState.CONFIRMED);
     }
 
@@ -188,7 +187,7 @@ class AsyncReservationRecoveryTests {
     void afterTheConfiguredAttemptsAnUnresolvableOrderBecomesRecoveryFailed() {
         UUID p = product();
         UUID orderId = acceptedOrder(p, 1);
-        when(inventoryClient.findOrderReservation(orderId))
+        when(inventoryClient.fenceOrderReservation(orderId))
                 .thenThrow(new InventoryServiceException(HttpStatus.SERVICE_UNAVAILABLE, null));
 
         recoverUntil(orderId, SagaState.RECOVERY_FAILED);
@@ -209,7 +208,7 @@ class AsyncReservationRecoveryTests {
         recovery.recoverDue();
 
         assertThat(orderStatus(orderId)).isEqualTo(OrderStatus.CONFIRMED);
-        verify(inventoryClient, never()).findOrderReservation(orderId);
+        verify(inventoryClient, never()).fenceOrderReservation(orderId);
     }
 
     @Autowired private io.micrometer.core.instrument.MeterRegistry meters;

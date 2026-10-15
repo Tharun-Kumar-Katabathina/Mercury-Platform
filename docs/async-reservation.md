@@ -86,13 +86,16 @@ in the `OrderCancelled` event (`INSUFFICIENT_STOCK`, `INVENTORY_NOT_FOUND`, `RES
 ## 5. The deadline
 
 If no reply has arrived by the deadline (the command or reply was lost, dead-lettered, or Kafka was down),
-recovery asks Inventory directly: `GET /api/v1/inventory/reservations/orders/{orderId}` (read-only).
+recovery fences the order at Inventory: `POST /api/v1/inventory/reservations/orders/{orderId}/fence`. If Inventory has
+decided, the fence returns that decision unchanged; if not, it writes a `FENCED` row, and from then on the order's
+command (still queued, redelivered, or in progress) changes nothing: the order id is the primary key of
+`order_reservations`, so only one of the two can claim it (Flyway `V7__fenced_order_reservations.sql`).
 
-| Inventory says | Order |
+| The fence returns | Order |
 |---|---|
 | `RESERVED` | `CONFIRMED` |
 | `REJECTED` + reason | `CANCELLED` with that reason |
-| nothing decided yet (`404 ORDER_RESERVATION_NOT_FOUND`) | `CANCELLED` with `RESERVATION_TIMEOUT` |
+| `FENCED` (nothing was decided) | `CANCELLED` with `RESERVATION_TIMEOUT`; no stock can be reserved for it any more |
 | unreachable / error | stays `AWAITING_INVENTORY`, retried with the existing exponential backoff; after `order.recovery.max-attempts` it becomes `RECOVERY_FAILED` (needs a person). **Never cancelled on a guess.** |
 
 If a reply arrives first, the order is no longer waiting and the deadline path leaves it alone (the state
@@ -100,9 +103,9 @@ checks are inside the same transaction as the change).
 
 ## 6. A reservation that turns up late
 
-"Nothing decided yet" is not a promise that Inventory never will: the command may still be queued. So an order
-can be cancelled for `RESERVATION_TIMEOUT` and **then** Inventory reserves for it. Order Service handles this
-without a new mechanism:
+The fence (section 5) makes this impossible in normal operation: a command that reaches Inventory after the fence
+reserves nothing and sends no reply. The path below stays as the safety net for the case the fence does not cover,
+a command processed after its `FENCED` row expired (`inventory.fence.retention`, 7 days):
 
 1. The late `InventoryReserved` reply finds a finished order, marks its items as held and reopens the saga as
    `COMPENSATING`, due immediately.
@@ -134,7 +137,7 @@ the second delivery a no-op (tested).
 | `mercury.inventory.events` | 3 | `orderId` | `InventoryReserved`, `InventoryRejected` |
 | `mercury.inventory.events.dlq` | 1 | – | replies Order could not process |
 
-A dead-lettered command or reply leaves its order waiting; the deadline lookup resolves it.
+A dead-lettered command or reply leaves its order waiting; the deadline fence resolves it.
 
 ## 8. Configuration (all overridable)
 
@@ -160,28 +163,26 @@ Inventory Service: `KAFKA_BOOTSTRAP_SERVERS`, `INVENTORY_CONSUMER_GROUP`, `INVEN
 
 | Where | Suite | Count | Covers |
 |---|---|---|---|
-| Inventory | `OrderReservationServiceTests`, `OrderReservationEndpointTests`, `OutboxPublisherTests`, `OutboxEndpointTests` | 27 | atomic all-or-nothing reservation, idempotency, concurrency, lookup, outbox |
+| Inventory | `OrderReservationServiceTests`, `OrderReservationEndpointTests`, `OutboxPublisherTests`, `OutboxEndpointTests` | 29 | atomic all-or-nothing reservation, idempotency, concurrency, lookup, fence endpoint, outbox |
+| Inventory | `OrderReservationFenceTests` | 7 | command after the fence, fence after a decision, both stalled-insert races, concurrent commands and fences |
 | Inventory | `ReservationCommandKafkaTests` (real Kafka) | 10 | one reply per command, duplicates, consumer crash, transient failure, poison, Kafka outage, publisher crash |
 | Order | `AsyncReservationTests` | 20 | accept, replies, replays, late reservations, cancel guard |
-| Order | `AsyncReservationRecoveryTests` | 7 | deadline lookup (confirm / reject / timeout), Inventory unreachable, `RECOVERY_FAILED` |
-| Order | `AsyncOrderApiTests`, `InventoryClientTests` (+3) | 6 + 3 | 202 / 200 / 422 contract, lookup client |
+| Order | `AsyncReservationRecoveryTests` | 7 | deadline fence (confirm / reject / fenced timeout), Inventory unreachable, `RECOVERY_FAILED` |
+| Order | `AsyncOrderApiTests`, `InventoryClientTests` (+3) | 6 + 4 | 202 / 200 / 422 contract, order fence client |
 | Order | `InventoryEventKafkaTests` (real Kafka) | 7 | reply consumer: duplicates, crash after commit, retries, poison, late reservation |
 | Order | `AsyncReservationIntegrationTests` (**real stack**) | 9 | accept → reserve → confirm; insufficient stock; replays; 20 concurrent orders for 5 units; Kafka down; Inventory down; duplicate and poison commands |
-| Order | `AsyncFailureInjectionIntegrationTests` (**real stack**, Order as a killable process) | 4 | `kill -9` between request and reply; reply that never arrives; reservation after timeout released once; Inventory unreachable at the deadline |
+| Order | `AsyncFailureInjectionIntegrationTests` (**real stack**, Order as a killable process) | 4 | `kill -9` between request and reply; reply that never arrives; command after the fence reserves nothing; Inventory unreachable at the deadline |
 
 The real-stack tests run PostgreSQL, Kafka, Product, Inventory and Notification as real processes and read
 PostgreSQL directly.
 
 ## 11. Known limitations
 
-- **No Inventory-side cancellation fence for ASYNC orders.** (The synchronous path has one since
-  `V6__fenced_reservations.sql`: [saga-recovery.md](saga-recovery.md#3-ambiguous-reservations).) Order cancels on a timeout and Inventory may reserve afterwards;
-  the late reply is released through compensation (section 6), which is correct but leaves the stock held
-  until that reply is consumed and the release runs. A fence ("Order cancelled this id: refuse the command")
-  would close that window; it was deliberately deferred. The idempotent release remains the safety mechanism.
-- **The late reply must be consumed.** The release in section 6 starts from the late `InventoryReserved` reply. With
-  `ORDER_INBOUND_ENABLED=false` nothing consumes it, so a reservation that turns up after a `RESERVATION_TIMEOUT` stays held
-  at Inventory and only the deadline lookup is left; that switch is for tests that isolate the lookup, not for running Order.
+- **Deploy Inventory before Order Service.** An Order that fences against an Inventory without the endpoint gets an
+  error at the deadline, keeps the order waiting and retries (never cancels on a guess), and after
+  `order.recovery.max-attempts` marks it `RECOVERY_FAILED`.
+- `FENCED` rows are removed after `inventory.fence.retention` (7 days). A command processed later than that would
+  reserve again; the late-reply release in section 6 is the safety net for it, and it needs the reply to be consumed.
 - Compensation after a late reservation releases per product with the existing release endpoint; Inventory's
   `order_reservations` row stays `RESERVED` (it records that the decision was made, not that it was undone).
 - A `RECOVERY_FAILED` ASYNC order that later receives `InventoryRejected` is left for a person; one that
