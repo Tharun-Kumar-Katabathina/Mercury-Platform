@@ -97,14 +97,11 @@ public class OrderReservationService {
                 backOff(attempt);
             } catch (DataIntegrityViolationException e) {
                 // a concurrent delivery of the same command, or the order's fence, committed first; this attempt
-                // rolled back whole, stock changes included
-                if (fencedNow(command.orderId())) {
-                    return Result.FENCED;
+                // rolled back whole, stock changes included. The next one sees the winner's row and, like any command
+                // for an order already decided, records this command as handled before answering FENCED or DUPLICATE
+                if (attempt >= maxAttempts) {
+                    throw e;   // the consumer retries, then dead-letters; Order's deadline resolves it
                 }
-                if (alreadyHandled(command)) {
-                    return Result.DUPLICATE;
-                }
-                throw e;
             }
         }
     }
@@ -170,16 +167,6 @@ public class OrderReservationService {
 
     private ProcessedEvent processed(ReservationCommand command) {
         return new ProcessedEvent(command.eventId(), CONSUMER, Instant.now(clock));
-    }
-
-    private boolean alreadyHandled(ReservationCommand command) {
-        return Boolean.TRUE.equals(transactionTemplate.execute(status ->
-                processedEvents.existsById(command.eventId()) || reservations.existsById(command.orderId())));
-    }
-
-    private boolean fencedNow(UUID orderId) {
-        return Boolean.TRUE.equals(transactionTemplate.execute(status -> reservations.findById(orderId)
-                .map(r -> r.getStatus() == ReservationOutcome.FENCED).orElse(false)));
     }
 
     /**
