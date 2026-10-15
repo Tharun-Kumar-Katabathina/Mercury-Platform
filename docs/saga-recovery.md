@@ -77,6 +77,10 @@ The solution has two halves.
    - idempotent; `422 IDEMPOTENCY_KEY_MISMATCH` for a key used for a release or another product.
 
    The tombstone is a row in `idempotency_records` with `operation = FENCED` (Flyway `V6__fenced_reservations.sql`).
+   `FenceTombstoneCleanup` deletes tombstones older than `inventory.fence.retention` (`INVENTORY_FENCE_RETENTION`, default
+   7 days, at least 1 hour) once an hour (`inventory.fence.cleanup.enabled=false` switches it off). A tombstone only has to
+   outlive a reserve that was in flight or retried when the order was cancelled, which is minutes at most, so an expired
+   one cannot let a late reserve through. `RESERVE` and `RELEASE` records are never deleted.
    The key is unique, so exactly one of "reserve" and "fence" can claim it: a reserve still in flight when the fence
    commits fails its own insert, rolls back its stock change and is answered `409`; a fence that loses to a committed
    reserve sees that reservation and reports `RESERVED`. Deploy Inventory before Order Service (an Order that calls
@@ -251,7 +255,7 @@ configuration. Every assertion reads PostgreSQL directly.
   it can no longer be applied after the cancel: compensation fences the key at Inventory first (section 3), and
   a reserve under a fenced key is refused. Covered by `SagaRecoveryIntegrationTests` (real stack,
   the reserve is held in the fault proxy until after the cancel) and `InventoryReservationFenceTests` (latch tests
-  for both orders of the race, duplicates and concurrency). Fence tombstones are never cleaned up.
+  for both orders of the race, duplicates and concurrency). Fence tombstones are removed after 7 days (section 3).
 - `RECOVERY_FAILED` orders need a person; there is no admin operation to retry or force-cancel them, by design
   (no authentication exists yet).
 - Failed attempts leave `CANCELLED` orders behind and idempotency records are never cleaned up.
