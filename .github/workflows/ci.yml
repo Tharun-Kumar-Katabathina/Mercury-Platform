@@ -222,7 +222,7 @@ jobs:
           tags: mercury/${{ matrix.service }}:ci
           cache-from: type=gha,scope=${{ matrix.service }}
           # only the default branch writes the layer cache: a pull request's cannot be restored by any other branch and filled the 10 GB limit
-          cache-to: ${{ github.ref == 'refs/heads/master' && format('type=gha,mode=max,scope={0}', matrix.service) || '' }}
+          cache-to: ${{ github.ref_name == github.event.repository.default_branch && format('type=gha,mode=max,scope={0}', matrix.service) || '' }}
       - name: Scan the image (operating system and libraries)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -241,21 +241,22 @@ jobs:
         with:
           sarif_file: trivy-image.sarif
           category: image-${{ matrix.service }}
-      - name: Log in to the registry (main only)
-        if: github.event_name == 'push' && github.ref_name == 'main'
+      # Build once, promote later: on the default branch the image that was just scanned is pushed under its commit SHA only.
+      # Nothing points at that tag until the release job below has seen every gate pass, so an image that a later test
+      # fails is never released or deployed; it is simply never promoted.
+      - name: Log in to the registry (default branch only)
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish (main only), tagged with the commit
-        if: github.event_name == 'push' && github.ref_name == 'main'
+      - name: Push the scanned image under its commit SHA (default branch only)
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mercury-${{ matrix.service }}"
           docker tag "mercury/${{ matrix.service }}:ci" "$image:${GITHUB_SHA}"
-          docker tag "mercury/${{ matrix.service }}:ci" "$image:main"
           docker push "$image:${GITHUB_SHA}"
-          docker push "$image:main"
 
   # ------------------------------------------------------------------------------------------------ 6. the whole platform
   platform:
@@ -296,10 +297,37 @@ jobs:
         run: docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile platform down -v
 
   # ------------------------------------------------------------------------------------------------ 7. delivery
+  release:
+    name: release the images (default branch, every gate passed)
+    # Continuous delivery: on every green push to the default branch the images pushed above under the commit SHA are
+    # promoted to the moving tag "latest". The SHA tag stays the one deployments use (immutable).
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+    needs: [changes, platform, integration-tests, images, security-scan, static-checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.images) }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag the tested image as latest
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mercury-${{ matrix.service }}"
+          docker buildx imagetools create --tag "$image:latest" "$image:${GITHUB_SHA}"
+
   deploy-staging:
     name: deploy to staging
-    if: github.event_name == 'push' && github.ref_name == 'main' && vars.DEPLOY_ENABLED == 'true'
-    needs: [platform, integration-tests, images, security-scan, static-checks]
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && vars.DEPLOY_ENABLED == 'true'
+    needs: [release, platform, integration-tests, images, security-scan, static-checks]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: staging                      # protection rules (reviewers, wait timer) are configured on this environment
@@ -322,12 +350,19 @@ jobs:
           kustomize edit set image "mercury/api-gateway=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mercury-api-gateway:${GITHUB_SHA}"
       - name: Create the secrets (first deploy only; later deploys keep them)
         run: scripts/k8s-create-secrets.sh
-      - name: Apply and wait for every rollout
+      - name: Apply everything but Order Service, and wait for those rollouts
+        # Order calls endpoints that a release may add to Inventory (the reservation fences: #25, #32). Rolling Order out
+        # together with Inventory lets a new Order pod call an old Inventory pod, so Inventory (and the rest) go first.
         run: |
-          kubectl apply -k infrastructure/kubernetes/overlays/production
-          for d in product-service inventory-service order-service notification-service user-service recommendation-service api-gateway; do
+          kubectl kustomize infrastructure/kubernetes/overlays/production > /tmp/rendered.yaml
+          kubectl apply -f /tmp/rendered.yaml -l 'app.kubernetes.io/name!=order-service'
+          for d in product-service inventory-service notification-service user-service recommendation-service api-gateway; do
             kubectl -n mercury rollout status "deployment/$d" --timeout=300s
           done
+      - name: Then Order Service
+        run: |
+          kubectl apply -f /tmp/rendered.yaml
+          kubectl -n mercury rollout status deployment/order-service --timeout=300s
       - name: Roll back if the rollout failed
         if: failure()
         run: |
