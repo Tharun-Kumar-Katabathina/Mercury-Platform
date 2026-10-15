@@ -55,14 +55,14 @@ jobs:
           done
           echo "$((REPEAT - ${#failed[@]})) of $REPEAT passes passed${failed[*]:+; failed: pass ${failed[*]}}"
           [ ${#failed[@]} -eq 0 ]
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: failure-matrix
           path: docs/failure-matrix.md
       # the log of every container at the moment a scenario failed, one folder for each pass that failed (nothing is
       # there when all passed): the matrix (of the last pass) and the job's log say what failed, these say why
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: chaos-diagnostics
@@ -85,7 +85,7 @@ jobs:
       - name: Optimized
         run: set -a && . ./.env && set +a && python3 scripts/perf/run.py --profile optimized --steps 100,500,1000
       - run: python3 scripts/perf/compare.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: performance

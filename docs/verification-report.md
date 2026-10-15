@@ -121,8 +121,8 @@ These are documented in the phase documents and accepted for this stage. None is
 | Item | Owner / next step |
 |---|---|
 | Staging cluster and deployment settings | Repository owner; Phase 18 |
-| 23 Dependabot pull requests (Spring Boot 4.1.1, Maven 3.10.0, lz4, resilience4j, Actions major versions) | One group at a time through CI |
-| Node 20 deprecation warnings on several Actions | checkout, setup-java, setup-buildx, build-push and gitleaks moved to their Node 24 majors; `upload-artifact`, `login-action` and `codeql-action` follow when Dependabot opens their bumps |
+| ~~23 Dependabot pull requests~~ | Done: Actions (#37), resilience4j 2.4.0 (#38), lz4-java 1.12.0 (#39), Maven 3.10.0 (#40), Spring Boot 4.1.1 (#41). Testing #39 exposed a fence race, fixed in #42. Full nightly green on `7dda871` (run 38707716449) |
+| ~~Node 20 deprecation warnings on several Actions~~ | Done: every action is on its Node 24 major (#37 and this change) |
 | Branch protection on `master` | Repository settings: require a pull request and the always-running checks |
 
 ## 7. How to reproduce
