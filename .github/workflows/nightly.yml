@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - run: scripts/init-secrets.sh
       - name: Inject the failures and check the invariants
         env:
@@ -78,7 +78,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - run: scripts/init-secrets.sh
       - name: Baseline
         run: set -a && . ./.env && set +a && python3 scripts/perf/run.py --profile baseline --steps 100,500,1000
