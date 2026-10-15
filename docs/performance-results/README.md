@@ -1,6 +1,7 @@
 # Phase 17.5: performance verification evidence
 
-Everything here was produced on 2026-10-08 on one laptop, from commit `2f6307b` plus the `scripts/perf/smoke.sh` retry fix committed with this folder.
+Everything here was produced on 2026-10-08 on one laptop, from commit `c14942d` plus the `scripts/perf/smoke.sh` retry fix committed with this folder (`59c2761`). (This line first named
+`2f6307b`, which is not in the repository's history; `c14942d` is the parent of the commit that added this folder.)
 No number below was rounded, filtered or reweighted. Where the data contradicts the claim, it says so.
 
 ## Verdict

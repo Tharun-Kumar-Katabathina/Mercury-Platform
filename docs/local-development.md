@@ -157,14 +157,14 @@ of them.
 
 | Service | Tests | Database used |
 |---|---|---|
-| Inventory | 77 (incl. 10 against a real Kafka broker in Testcontainers) | In-memory H2 (PostgreSQL mode), schema from Flyway, `ddl-auto=validate` |
-| Product | 27 (21 normal + 6 integration) | In-memory H2 for the 21 normal tests |
+| Inventory | 126 (incl. 10 against a real Kafka broker in Testcontainers) | In-memory H2 (PostgreSQL mode), schema from Flyway, `ddl-auto=validate` |
+| Product | 50 (44 normal + 6 integration) | In-memory H2 for the 44 normal tests |
 
 Product's suite includes the real integration test (below) and therefore needs Docker. To run
 Product's tests **without** it:
 
 ```bash
-./mvnw clean test -Dtest='!ProductInventoryIntegrationTests'     # 21 tests
+./mvnw clean test -Dtest='!ProductInventoryIntegrationTests'     # 44 tests
 ```
 
 ### The real Product → Inventory → PostgreSQL integration test
@@ -194,7 +194,7 @@ It takes roughly 20 seconds. Logs of the child processes are written to
 
 - **Docker is required** for the integration test. Without Docker it is skipped
   (`@Testcontainers(disabledWithoutDocker = true)`), so a Docker-less run of Product's suite
-  silently executes 21 tests instead of 27. The "no Docker" path has not been exercised.
+  silently executes 44 tests instead of 50. The "no Docker" path has not been exercised.
 - **The test expects `../inventory-service` next to Product Service** (it resolves the
   directory relative to Product's project directory and runs its `mvnw`). Moving or renaming
   that folder breaks the test.
