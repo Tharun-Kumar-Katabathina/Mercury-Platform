@@ -42,7 +42,7 @@ jobs:
       stack: ${{ steps.pick.outputs.stack }}
       code: ${{ steps.pick.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: pick
@@ -64,7 +64,7 @@ jobs:
       matrix:
         service: ${{ fromJSON(needs.changes.outputs.services) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -91,7 +91,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -116,7 +116,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Shell scripts
         run: |
           sudo apt-get -qq install -y shellcheck
@@ -165,7 +165,7 @@ jobs:
       pull-requests: read                  # the secret scan lists a pull request's commits: a private repository needs this explicitly
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0                       # the secret scan reads the history, not just the tip
       - name: Secrets in the code or its history
@@ -208,7 +208,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.changes.outputs.images) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - name: Build (and cache) the image
         uses: docker/build-push-action@v6
@@ -267,7 +267,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - name: Generate throw-away secrets
         run: scripts/init-secrets.sh
@@ -307,7 +307,7 @@ jobs:
       group: deploy-staging
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Cluster access
         run: |
           mkdir -p ~/.kube
