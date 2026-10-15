@@ -95,6 +95,6 @@ client timeouts, and (in Order Service) a circuit breaker, a bulkhead and a dura
 - [Event-driven architecture](event-driven-architecture.md): Kafka topology, event contracts, outbox, consumer idempotency, dead-lettering.
 - [Asynchronous inventory reservation](async-reservation.md): Phase 10, the ASYNC order flow, deadline recovery, late reservations.
 - [Saga reliability and recovery](saga-recovery.md): durable saga state, recovery worker, circuit breaker, failure scenarios.
-- [Security](security.md), [Resilience](resilience.md), [Performance](performance.md), [Recommendations](recommendations.md), [CI/CD](ci-cd.md), [Observability](observability.md), [Infrastructure](infrastructure.md).
+- [Security](security.md), [Resilience](resilience.md), [Performance results](performance-results/README.md), [Recommendations](recommendations.md), [CI/CD](ci-cd.md), [Observability](observability.md), [Infrastructure](infrastructure.md).
 - [Local development](local-development.md): starting everything, environment variables,
   running the tests, caveats.

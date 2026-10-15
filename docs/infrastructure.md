@@ -139,7 +139,7 @@ cluster is available (`kind` is enough).
 - **New services**: `user-service` (8085), `recommendation-service` (8086), `api-gateway` (8090), all built from the same Dockerfile, with the same probes,
   limits and hardening; plus Redis. In Kubernetes only the gateway is a `LoadBalancer`; a NetworkPolicy lets it, and only it, take traffic from outside the namespace.
 - Observability overlay: `docker-compose.observability.yml` ([observability.md](observability.md)). Chaos overlay and harness: [resilience.md](resilience.md).
-  Performance overlay (nginx load balancer, scaling): [performance.md](performance.md).
+  Performance overlay (nginx load balancer, scaling): [performance results](performance-results/README.md).
 
 ## 8. Known limitations
 

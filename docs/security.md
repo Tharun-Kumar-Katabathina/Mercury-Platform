@@ -141,7 +141,7 @@ get up to N times the limit; a shared (Redis) limiter is the upgrade if exact gl
 
 ## 8. How it was tested
 
-- **Per service** (`security/SecurityApiTests`, 5 services, 38 tests): missing, garbage, expired, wrong-issuer, wrong-audience,
+- **Per service** (`security/SecurityApiTests`, 5 services, 40 tests): missing, garbage, expired, wrong-issuer, wrong-audience,
   foreign-key and unsigned (`alg=none`-style) tokens; each role against each endpoint; ownership and idempotency scoping;
   malformed input; SQL-injection strings; error bodies without internals.
 - **User-service** (13): hashing never leaks, registration rules, uniform login errors, lockout, throttling, token claims, JWKS.
@@ -165,4 +165,4 @@ get up to N times the limit; a shared (Redis) limiter is the upgrade if exact gl
 - Kafka messages are not signed; anything that can write to the broker can forge events. Broker authentication and ACLs belong to the
   infrastructure phase.
 - Authentication is **switched off for the load tests** (`SECURITY_ENABLED=false`), so the published performance numbers exclude token
-  verification; [performance.md](performance.md) measures that overhead separately.
+  verification; that overhead has not been measured.
