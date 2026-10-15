@@ -53,7 +53,7 @@ see [ci-cd.md](ci-cd.md#nightly-nightlyyml). A name that is not a scenario stops
 | F12 | Order killed right after accepting orders | the outbox still delivers every command |
 | F13 | Duplicate command ×3 | one reservation, one reply |
 | F14 | Unknown / out-of-order / repeated replies | all ignored; a confirmed order cannot be un-confirmed |
-| F15 | Reservation timeout, then a late reservation | cancelled with `RESERVATION_TIMEOUT`; the late stock is detected and released |
+| F15 | Reservation timeout, then the commands arrive late | fenced at Inventory and cancelled with `RESERVATION_TIMEOUT`; the late commands are refused and reserve nothing |
 | F16 | Inventory frozen at the deadline | **no cancellation on a guess**; retried with backoff; resolved when it thaws |
 | F17 | Poison messages | dead-lettered; nothing behind them blocked |
 | F18 | User Service killed | logged-in customers keep ordering (tokens verified locally); new logins refused |
