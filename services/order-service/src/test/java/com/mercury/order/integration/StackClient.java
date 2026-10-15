@@ -209,7 +209,24 @@ final class StackClient {
         }
     }
 
-    /** Inventory's stored decision for an ASYNC order: RESERVED or REJECTED, or null when it has decided nothing */
+    /** true once Inventory has handled the order's reservation command (whatever it decided, FENCED included) */
+    boolean inventoryHandledCommand(String orderDb, UUID orderId) throws SQLException {
+        UUID commandId;
+        try (Connection c = stack.open(orderDb);
+             PreparedStatement s = c.prepareStatement("SELECT event_id FROM order_outbox WHERE aggregate_id = ? "
+                     + "AND event_type = 'InventoryReservationRequested'")) {
+            s.setObject(1, orderId);
+            try (ResultSet rs = s.executeQuery()) {
+                if (!rs.next()) {
+                    return false;
+                }
+                commandId = rs.getObject(1, UUID.class);
+            }
+        }
+        return scalar(RealServicesStack.INVENTORY_DB, "SELECT count(*) FROM processed_events WHERE event_id = ?", commandId) == 1;
+    }
+
+    /** Inventory's stored decision for an ASYNC order: RESERVED, REJECTED or FENCED, or null when it has decided nothing */
     String inventoryDecision(UUID orderId) throws SQLException {
         try (Connection c = stack.open(RealServicesStack.INVENTORY_DB);
              PreparedStatement s = c.prepareStatement("SELECT status FROM order_reservations WHERE order_id = ?")) {

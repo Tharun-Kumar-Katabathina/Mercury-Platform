@@ -114,22 +114,23 @@ public class InventoryClient {
     }
 
     /**
-     * What did Inventory decide for this ASYNC order? Read-only; empty means it has decided nothing (yet),
-     * for example because the command is still queued or was dead-lettered.
+     * Settles an ASYNC order at Inventory before giving up on it: RESERVED or REJECTED if Inventory had decided,
+     * otherwise FENCED, after which no command for the order can reserve stock. Idempotent, so it may be retried.
+     *
+     * @throws InventoryServiceException if Inventory cannot be asked, or answers with a status this client does not know
      */
-    public Optional<OrderReservationSnapshot> findOrderReservation(UUID orderId) {
+    public OrderReservationSnapshot fenceOrderReservation(UUID orderId) {
         return guard.execute(() -> {
             try {
-                return Optional.ofNullable(restClient.get()
-                        .uri("/api/v1/inventory/reservations/orders/{orderId}", orderId)
+                OrderReservationSnapshot outcome = restClient.post()
+                        .uri("/api/v1/inventory/reservations/orders/{orderId}/fence", orderId)
                         .retrieve()
-                        .body(OrderReservationSnapshot.class));
-            } catch (InventoryServiceException e) {
-                if (e.getStatus().value() == 404 && e.getResponseBody() != null
-                        && e.getResponseBody().contains("ORDER_RESERVATION_NOT_FOUND")) {
-                    return Optional.<OrderReservationSnapshot>empty();
+                        .body(OrderReservationSnapshot.class);
+                if (outcome == null || !(outcome.reserved() || outcome.rejected() || outcome.fenced())) {
+                    throw new InventoryServiceException(HttpStatus.BAD_GATEWAY,
+                            "unknown order fence status " + (outcome == null ? null : outcome.status()));
                 }
-                throw e;
+                return outcome;
             } catch (ResourceAccessException e) {
                 throw new InventoryServiceException(HttpStatus.SERVICE_UNAVAILABLE, null, e);
             }

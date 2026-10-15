@@ -83,38 +83,42 @@ public class OrderSagaService {
     }
 
     /**
-     * ASYNC, the reply is overdue: ask Inventory what it decided and finish the order accordingly.
-     * RESERVED -> CONFIRMED, REJECTED -> CANCELLED with Inventory's reason, nothing decided -> CANCELLED with
-     * RESERVATION_TIMEOUT (if the reservation shows up later, the late-reply path releases it).
+     * ASYNC, the reply is overdue: fence the order at Inventory and finish it with what that returns.
+     * RESERVED -> CONFIRMED, REJECTED -> CANCELLED with Inventory's reason, FENCED (nothing was decided) ->
+     * CANCELLED with RESERVATION_TIMEOUT. The fence is what makes the cancel safe: once it is written, a command
+     * still queued for this order is refused by Inventory and cannot reserve stock any more. (The late-reply path
+     * still releases a reservation that turns up anyway, e.g. after the tombstone expired.)
      *
      * @return true when the order reached a final state (or a reply finished it first), false when
      *         Inventory could not be asked and a retry is needed
      */
     public boolean resolveAwaiting(UUID orderId) {
 
-        Optional<com.mercury.order.dto.OrderReservationSnapshot> decision;
+        com.mercury.order.dto.OrderReservationSnapshot decision;
         long started = System.nanoTime();
         try {
-            decision = inventoryClient.findOrderReservation(orderId);
+            decision = inventoryClient.fenceOrderReservation(orderId);
         } catch (RuntimeException e) {
-            log.warn("saga orderId={} operation=ORDER_LOOKUP result=FAILED reason={} durationMs={}",
+            log.warn("saga orderId={} operation=ORDER_FENCE result=FAILED reason={} durationMs={}",
                     orderId, e.getMessage(), (System.nanoTime() - started) / 1_000_000);
-            return false;
+            return false;   // never cancel on a guess: retried with backoff, then RECOVERY_FAILED
         }
+        log.info("saga orderId={} operation=ORDER_FENCE result={} durationMs={}",
+                orderId, decision.status(), (System.nanoTime() - started) / 1_000_000);
 
-        if (decision.isPresent() && decision.get().reserved()) {
+        if (decision.reserved()) {
             if (transactions.confirmAwaiting(orderId)) {
                 metrics.orderConfirmed();
-                log.info("saga orderId={} state=CONFIRMED (resolved by lookup)", orderId);
+                log.info("saga orderId={} state=CONFIRMED (resolved at the deadline)", orderId);
             }
             return true;
         }
 
-        String reason = decision.map(d -> d.reason() == null ? "RESERVATION_REJECTED" : d.reason())
-                .orElse("RESERVATION_TIMEOUT");
+        String reason = decision.fenced() ? "RESERVATION_TIMEOUT"
+                : decision.reason() == null ? "RESERVATION_REJECTED" : decision.reason();
         if (transactions.cancelAwaiting(orderId, reason)) {
             metrics.orderCancelled();
-            log.info("saga orderId={} state=CANCELLED reason={} (resolved by lookup)", orderId, reason);
+            log.info("saga orderId={} state=CANCELLED reason={} (resolved at the deadline)", orderId, reason);
         }
         return true;
     }

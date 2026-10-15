@@ -104,7 +104,7 @@ class AsyncFailureInjectionIntegrationTests {
     void aReplyThatNeverArrivesIsResolvedAfterTheDeadlineByAskingInventory() throws Exception {
         UUID reservable = productWithStock(10);
         UUID scarce = productWithStock(1);
-        // Order does not consume replies at all, so only the deadline lookup can finish these orders
+        // Order does not consume replies at all, so only the deadline (the fence) can finish these orders
         stack.startOrderProcess(stack.inventoryBaseUrl(), asyncOrder("3s", false));
 
         UUID confirmed = idOf(place(reservable, 2));
@@ -119,7 +119,7 @@ class AsyncFailureInjectionIntegrationTests {
     }
 
     @Test
-    void aReservationThatArrivesAfterTheOrderTimedOutIsGivenBackExactlyOnce() throws Exception {
+    void aCommandThatArrivesAfterTheOrderTimedOutReservesNothing() throws Exception {
         UUID product = productWithStock(10);
         stack.startOrderProcess(stack.inventoryBaseUrl(), asyncOrder("3s", true));
 
@@ -129,32 +129,30 @@ class AsyncFailureInjectionIntegrationTests {
             Api accepted = place(product, 4);
             assertThat(accepted.status()).isEqualTo(202);
             orderId = idOf(accepted);
-            awaitStatus(orderId, "CANCELLED", 60);    // deadline passed: Inventory has decided nothing -> timeout
+            awaitStatus(orderId, "CANCELLED", 60);    // deadline passed: Inventory had decided nothing -> fenced, timeout
             assertThat(client.cancelReason(DB, orderId)).contains("RESERVATION_TIMEOUT");
+            assertThat(client.inventoryDecision(orderId)).isEqualTo("FENCED");
             assertThat(client.stock(product)).isEqualTo(new Stock(10, 0));
         } finally {
             stack.unpauseKafka();
         }
 
-        // the command is finally delivered: Inventory reserves for an order that no longer wants it ...
-        await().atMost(Duration.ofSeconds(60)).until(() -> "RESERVED".equals(client.inventoryDecision(orderId)));
-        // ... and Order, on the late reply, gives it back through the durable compensation path
-        await().atMost(Duration.ofSeconds(90)).untilAsserted(() -> {
-            assertThat(client.stock(product)).isEqualTo(new Stock(10, 0));
-            assertThat(client.sagaState(DB, orderId)).isEqualTo("CANCELLED");
-        });
+        // the command is finally delivered, after the fence: Inventory handles it and reserves nothing
+        await().atMost(Duration.ofSeconds(60)).until(() -> client.inventoryHandledCommand(DB, orderId));
+        assertThat(client.inventoryDecision(orderId)).isEqualTo("FENCED");
+        assertThat(client.stock(product)).isEqualTo(new Stock(10, 0));
+        assertThat(client.inventoryRepliesWritten(orderId)).isZero();                       // no reply, nothing to release
+        assertThat(client.inventoryRecords(product, "RELEASE")).isZero();
         assertThat(client.orderStatus(DB, orderId)).isEqualTo("CANCELLED");
-        assertThat(client.itemStatus(DB, orderId, product)).isEqualTo("RELEASED");
-        assertThat(client.inventoryRecords(product, "RELEASE")).isEqualTo(1);               // released once
+        assertThat(client.sagaState(DB, orderId)).isEqualTo("CANCELLED");
         assertThat(client.outboxOfType(DB, orderId, "OrderCancelled")).isEqualTo(1);        // announced once
     }
 
     @Test
     void ifInventoryIsUnreachableWhenTheDeadlinePassesTheOrderIsNotCancelledOnAGuess() throws Exception {
         UUID product = productWithStock(10);
-        // Replies ARE consumed here, unlike in the lookup-only test above. Whether the order ends up confirmed or timed out
-        // depends on who is first once Inventory is back, and a reservation that turns up after a timeout can only be found
-        // and given back by the consumer: without it nothing would ever learn about it and the stock would stay reserved.
+        // Replies ARE consumed here, unlike in the deadline-only test above. Whether the order ends up confirmed or timed
+        // out depends on who is first once Inventory is back: the consumer's reservation, or the fence at the deadline.
         stack.startOrderProcess(stack.inventoryBaseUrl(), asyncOrder("2s", true));
         stack.stopInventoryService();
 
@@ -166,11 +164,11 @@ class AsyncFailureInjectionIntegrationTests {
         stack.startInventoryService();           // it consumes the waiting command and reserves
 
         // Two outcomes are both correct, depending on who is first once Inventory is back: its consumer
-        // reserves and the reply (or the lookup) confirms the order, OR the lookup runs a moment before the
-        // consumer has joined and Inventory has decided nothing yet, so the order times out and the
-        // reservation that follows is released as a late reservation. What must hold either way: the order
-        // reaches a final state and no stock is stranded. Both happen from run to run: the first lookup Inventory
-        // answers comes as it finishes starting, which is also when its consumer starts working.
+        // reserves and the reply (or the fence) confirms the order, OR the fence runs a moment before the
+        // consumer has joined and Inventory has decided nothing yet, so the order is fenced and times out and the
+        // command that follows reserves nothing. What must hold either way: the order reaches a final state and no
+        // stock is held for it. Both happen from run to run: the first fence Inventory answers comes as it finishes
+        // starting, which is also when its consumer starts working.
         await().atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofMillis(250)).untilAsserted(() -> {
             String status = client.orderStatus(DB, orderId);
             if ("CONFIRMED".equals(status)) {
@@ -180,9 +178,10 @@ class AsyncFailureInjectionIntegrationTests {
                 assertThat(status).isEqualTo("CANCELLED");
                 assertThat(client.cancelReason(DB, orderId)).contains("RESERVATION_TIMEOUT");
                 assertThat(client.sagaState(DB, orderId)).isEqualTo("CANCELLED");
-                assertThat(client.stock(product)).isEqualTo(new Stock(10, 0));     // the late reservation was given back ...
-                // ... and it really was: before Inventory has decided anything the stock is 10/0 as well
-                assertThat(client.inventoryRecords(product, "RELEASE")).isEqualTo(1);
+                assertThat(client.inventoryDecision(orderId)).isEqualTo("FENCED");
+                assertThat(client.inventoryHandledCommand(DB, orderId)).isTrue();   // the command came after the fence ...
+                assertThat(client.stock(product)).isEqualTo(new Stock(10, 0));     // ... and held nothing
+                assertThat(client.inventoryRecords(product, "RELEASE")).isZero();
             }
         });
     }
