@@ -8,6 +8,7 @@ import com.mercury.inventory.exception.OrderReservationNotFoundException;
 import com.mercury.inventory.model.Inventory;
 import com.mercury.inventory.model.OrderReservation;
 import com.mercury.inventory.model.ProcessedEvent;
+import com.mercury.inventory.model.ReservationOutcome;
 import com.mercury.inventory.outbox.OutboxWriter;
 import com.mercury.inventory.repository.InventoryRepository;
 import com.mercury.inventory.repository.OrderReservationRepository;
@@ -48,7 +49,8 @@ public class OrderReservationService {
 
     public static final String CONSUMER = "reservation-command";
 
-    public enum Result { RESERVED, REJECTED, DUPLICATE }
+    /** FENCED: the order was cancelled before this command was decided; nothing is reserved and no reply is sent */
+    public enum Result { RESERVED, REJECTED, DUPLICATE, FENCED }
 
     private final InventoryRepository inventoryRepository;
     private final OrderReservationRepository reservations;
@@ -94,7 +96,11 @@ public class OrderReservationService {
                 }
                 backOff(attempt);
             } catch (DataIntegrityViolationException e) {
-                // a concurrent delivery of the same command committed first
+                // a concurrent delivery of the same command, or the order's fence, committed first; this attempt
+                // rolled back whole, stock changes included
+                if (fencedNow(command.orderId())) {
+                    return Result.FENCED;
+                }
                 if (alreadyHandled(command)) {
                     return Result.DUPLICATE;
                 }
@@ -118,9 +124,10 @@ public class OrderReservationService {
         if (processedEvents.existsById(command.eventId())) {
             return Result.DUPLICATE;
         }
-        if (reservations.existsById(command.orderId())) {
+        Optional<OrderReservation> decided = reservations.findById(command.orderId());
+        if (decided.isPresent()) {
             processedEvents.saveAndFlush(processed(command));   // a new event id for an order already decided
-            return Result.DUPLICATE;
+            return decided.get().getStatus() == ReservationOutcome.FENCED ? Result.FENCED : Result.DUPLICATE;
         }
 
         // decide first, change nothing yet: a rejection must leave every stock row untouched
@@ -168,6 +175,38 @@ public class OrderReservationService {
     private boolean alreadyHandled(ReservationCommand command) {
         return Boolean.TRUE.equals(transactionTemplate.execute(status ->
                 processedEvents.existsById(command.eventId()) || reservations.existsById(command.orderId())));
+    }
+
+    private boolean fencedNow(UUID orderId) {
+        return Boolean.TRUE.equals(transactionTemplate.execute(status -> reservations.findById(orderId)
+                .map(r -> r.getStatus() == ReservationOutcome.FENCED).orElse(false)));
+    }
+
+    /**
+     * Settles an order for good, from Order Service's side: called when its waiting deadline has passed and it is
+     * about to cancel. If Inventory has already decided (RESERVED or REJECTED) that outcome is returned unchanged
+     * and Order acts on it. Otherwise a FENCED tombstone is written and returned: from then on the order's command
+     * changes nothing, so Order may cancel knowing that no stock can be reserved for it later.
+     *
+     * The order id is the primary key, so this and the command cannot both claim the order: whichever inserts first
+     * wins, and the loser sees the winner's row. Idempotent: fencing a fenced order returns the same tombstone.
+     */
+    public OrderReservation fence(UUID orderId) {
+        try {
+            boolean[] written = {false};
+            OrderReservation outcome = transactionTemplate.execute(status -> reservations.findWithItemsByOrderId(orderId)
+                    .orElseGet(() -> {
+                        written[0] = true;
+                        return reservations.saveAndFlush(OrderReservation.fenced(orderId, Instant.now(clock)));
+                    }));
+            if (written[0]) {
+                metrics.fenced("async");   // once per order, after the commit; a repeated fence is not counted
+            }
+            return outcome;
+        } catch (DataIntegrityViolationException e) {
+            // the command (or another fence) inserted the order's row first: report what it decided
+            return findOutcome(orderId);
+        }
     }
 
     /** The stored outcome for an order: what Order Service asks when a reply is overdue. */

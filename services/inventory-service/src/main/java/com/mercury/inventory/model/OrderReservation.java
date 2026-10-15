@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import org.springframework.data.domain.Persistable;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -54,7 +55,7 @@ public class OrderReservation implements Persistable<UUID> {
         reservation.orderId = orderId;
         reservation.idempotencyKey = keyFor(orderId);
         reservation.status = ReservationOutcome.RESERVED;
-        reservation.createdAt = now;
+        reservation.createdAt = stamp(now);
         items.forEach(i -> reservation.items.add(
                 new OrderReservationItem(reservation, i.productId(), i.quantity())));
         return reservation;
@@ -67,8 +68,23 @@ public class OrderReservation implements Persistable<UUID> {
         reservation.status = ReservationOutcome.REJECTED;
         reservation.reason = reason;
         reservation.rejectedProductId = productId;
-        reservation.createdAt = now;
+        reservation.createdAt = stamp(now);
         return reservation;
+    }
+
+    /** The tombstone of an order cancelled before Inventory decided anything for it. Holds nothing. */
+    public static OrderReservation fenced(UUID orderId, Instant now) {
+        OrderReservation reservation = new OrderReservation();
+        reservation.orderId = orderId;
+        reservation.idempotencyKey = keyFor(orderId);
+        reservation.status = ReservationOutcome.FENCED;
+        reservation.createdAt = stamp(now);
+        return reservation;
+    }
+
+    /** the column keeps microseconds: a finer value would differ from the stored row (see TimestampPrecisionTests) */
+    private static Instant stamp(Instant now) {
+        return now.truncatedTo(ChronoUnit.MICROS);
     }
 
     public record ItemQuantity(UUID productId, int quantity) {

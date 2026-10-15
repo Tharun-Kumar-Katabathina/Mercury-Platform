@@ -174,11 +174,14 @@ PostgreSQL directly.
 
 ## 11. Known limitations
 
-- **No Inventory-side cancellation fence for ASYNC orders.** (The synchronous path has one since
-  `V6__fenced_reservations.sql`: [saga-recovery.md](saga-recovery.md#3-ambiguous-reservations).) Order cancels on a timeout and Inventory may reserve afterwards;
-  the late reply is released through compensation (section 6), which is correct but leaves the stock held
-  until that reply is consumed and the release runs. A fence ("Order cancelled this id: refuse the command")
-  would close that window; it was deliberately deferred. The idempotent release remains the safety mechanism.
+- **The Inventory-side fence for ASYNC orders exists, Order Service does not call it yet.** Inventory has
+  `POST /api/v1/inventory/reservations/orders/{orderId}/fence` (SERVICE/ADMIN, Flyway `V7__fenced_order_reservations.sql`):
+  it returns the order's outcome if Inventory has decided (`RESERVED` or `REJECTED`), else writes a `FENCED` row and
+  returns it. The order id is the primary key of `order_reservations`, so exactly one of the command and the fence
+  can claim an order; a command that arrives after the fence changes nothing and sends no reply
+  (`inventory.commands.fenced`), and a command whose insert loses to a fence rolls back its stock change. Until
+  Order's deadline path switches from the read-only lookup to the fence, a late reservation is still released
+  through compensation (section 6). `FENCED` rows are removed after `inventory.fence.retention` (7 days).
 - **The late reply must be consumed.** The release in section 6 starts from the late `InventoryReserved` reply. With
   `ORDER_INBOUND_ENABLED=false` nothing consumes it, so a reservation that turns up after a `RESERVATION_TIMEOUT` stays held
   at Inventory and only the deadline lookup is left; that switch is for tests that isolate the lookup, not for running Order.

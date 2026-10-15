@@ -13,6 +13,7 @@ public class InventoryMetrics {
     private final Counter dlq;
     private final Counter reserved;
     private final Counter rejected;
+    private final Counter fenced;
 
     public InventoryMetrics(MeterRegistry registry) {
         this.consumed = Counter.builder("inventory.commands.consumed").description("reservation commands processed").register(registry);
@@ -21,6 +22,7 @@ public class InventoryMetrics {
         this.dlq = Counter.builder("inventory.commands.dlq").description("commands sent to the dead-letter topic").register(registry);
         this.reserved = Counter.builder("inventory.order.reserved").description("orders reserved in full").register(registry);
         this.rejected = Counter.builder("inventory.order.rejected").description("orders rejected (nothing reserved)").register(registry);
+        this.fenced = Counter.builder("inventory.commands.fenced").description("commands refused: the order was fenced (cancelled) first").register(registry);
     }
 
     public void consumed() {
@@ -45,5 +47,9 @@ public class InventoryMetrics {
 
     public void rejected() {
         rejected.increment();
+    }
+
+    public void fenced() {
+        fenced.increment();
     }
 }

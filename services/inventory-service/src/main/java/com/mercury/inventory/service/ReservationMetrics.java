@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
  *  inventory.reservations{path,result}   reserved | replayed
  *  inventory.rejections{path,reason}     INSUFFICIENT_STOCK | INVENTORY_NOT_FOUND
  *  inventory.oversell.attempts{path}     requests for more stock than was available: refused, nothing oversold
+ *  inventory.fences{path}                orders (async) fenced before anything was decided for them
  */
 @Component
 public class ReservationMetrics {
@@ -27,10 +28,15 @@ public class ReservationMetrics {
             registry.counter("inventory.rejections", "path", path, "reason", "INVENTORY_NOT_FOUND");
             registry.counter("inventory.oversell.attempts", "path", path);
         }
+        registry.counter("inventory.fences", "path", "async");
     }
 
     public void reserved(String path, boolean replayed) {
         registry.counter("inventory.reservations", "path", path, "result", replayed ? "replayed" : "reserved").increment();
+    }
+
+    public void fenced(String path) {
+        registry.counter("inventory.fences", "path", path).increment();
     }
 
     public void rejected(String path, String reason) {
