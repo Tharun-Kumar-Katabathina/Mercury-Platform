@@ -56,6 +56,9 @@ skipped. This is how a scenario that fails now and then is measured, and how a f
   overlay is rendered with the SHA, so what runs is exactly what was tested. The default branch is read from the repository
   (`github.event.repository.default_branch`), not written into the workflow, so renaming it cannot silently switch delivery off.
 - Concurrency: a new push cancels the previous run of the same branch's pull request; deploys never overlap and are never cancelled half-way.
+- Registry hiccups: each service's `.mvn/maven.config` makes Maven retry a download that gets 429, 500, 502, 503 or 504 (three retries,
+  5 s growing backoff) instead of failing on the first answer; Maven's own default retries only 429 and 503. It applies to CI, the image
+  builds (the Dockerfile copies `.mvn/`) and local builds alike.
 
 ## What it needs from you (once)
 
