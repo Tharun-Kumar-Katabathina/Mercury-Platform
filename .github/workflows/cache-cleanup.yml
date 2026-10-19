@@ -12,8 +12,10 @@ on:
         description: "Also delete the default branch's caches (the next build is slow once)"
         type: boolean
         default: false
-  schedule:
-    - cron: "17 4 * * 0"
+  # Schedule paused on 2026-10-19 at the owner's request; manual runs (workflow_dispatch) still work.
+  # To resume, uncomment the two lines below.
+  # schedule:
+  #   - cron: "17 4 * * 0"
 
 permissions:
   actions: write
