@@ -35,6 +35,10 @@ ARG PORT=8080
 LABEL org.opencontainers.image.title="mercury-${SERVICE}" \
       org.opencontainers.image.source="https://github.com/Tharun-Kumar-Katabathina/Mercury-Platform"
 
+# the base image is republished less often than Alpine patches its packages: take the patched versions now, so a fixed
+# CVE in an OS package (e.g. libexpat CVE-2026-77214, fixed in 2.9.0-r0) does not wait for the next base image
+RUN apk upgrade --no-cache
+
 # fixed, non-privileged uid/gid so Kubernetes can enforce runAsNonRoot / runAsUser
 RUN addgroup -g 10001 -S mercury && adduser -u 10001 -S -G mercury -H -s /sbin/nologin mercury
 WORKDIR /app
