@@ -4,8 +4,10 @@ name: Nightly resilience and performance
 run-name: ${{ inputs.scenarios && format('failure matrix {0} x{1}', inputs.scenarios, inputs.repeat) || 'Nightly resilience and performance' }}
 
 on:
-  schedule:
-    - cron: "0 3 * * *"
+  # Schedule paused on 2026-10-19 at the owner's request; manual runs (workflow_dispatch) still work.
+  # To resume, uncomment the two lines below.
+  # schedule:
+  #   - cron: "0 3 * * *"
   # On demand, a few scenarios can be run alone and several times over: how often does this one fail, and is it fixed?
   workflow_dispatch:
     inputs:
