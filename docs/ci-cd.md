@@ -38,6 +38,8 @@ and one review, disallow force-push. The pipeline cannot enforce its own gates; 
 
 > **Paused since 2026-10-19.** The nightly schedule and the weekly cache cleanup (`cache-cleanup.yml`) are commented out at the owner's
 > request; both still run on demand from the Actions tab. To resume, uncomment the `schedule:` lines in the two workflows.
+> Dependabot version updates are paused the same way (`open-pull-requests-limit: 0` on every entry of `.github/dependabot.yml`;
+> remove it to resume). GitHub does not let the "Dependabot Updates" workflow be disabled from the Actions tab.
 
 Two jobs too long for every pull request: the **failure matrix** (`scripts/chaos/run.py`, ~30 minutes: kills and freezes services,
 partitions the network, restarts Kafka and PostgreSQL, and checks the invariants in the databases) and the **baseline-vs-optimized load test**
